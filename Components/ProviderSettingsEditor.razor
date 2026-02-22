@@ -1,0 +1,54 @@
+@using AiAgileTeam.Models
+
+<MudSelect T="string" Label="Provider" @bind-Value="Config.Provider" Class="mb-3">
+    <MudSelectItem Value="@("OpenAI")">OpenAI</MudSelectItem>
+    <MudSelectItem Value="@("AzureOpenAI")">Azure OpenAI</MudSelectItem>
+    <MudSelectItem Value="@("GoogleGemini")">Google Gemini</MudSelectItem>
+</MudSelect>
+
+@if (Config.Provider == "AzureOpenAI")
+{
+    <MudTextField Label="Endpoint" @bind-Value="Config.Endpoint" Class="mb-3" />
+}
+
+<MudTextField Label="API Key" @bind-Value="Config.ApiKey" InputType="InputType.Password" Class="mb-3" />
+
+<MudButton Variant="Variant.Outlined" Color="Color.Primary" OnClick="@(() => OnLoadModels.InvokeAsync(Config))" Disabled="IsLoading" Class="mb-3">
+    @if (IsLoading)
+    {
+        <MudProgressCircular Class="ms-n1" Size="Size.Small" Indeterminate="true" />
+        <MudText Class="ms-2">Loading...</MudText>
+    }
+    else
+    {
+        <MudText>Load / Refresh Models</MudText>
+    }
+</MudButton>
+
+@if (Models.Any() || !string.IsNullOrWhiteSpace(Config.Model))
+{
+    <MudSelect T="string" Label="Model" @bind-Value="Config.Model" Class="mb-3">
+        @if (!Models.Contains(Config.Model) && !string.IsNullOrWhiteSpace(Config.Model))
+        {
+            <MudSelectItem Value="@Config.Model">@Config.Model</MudSelectItem>
+        }
+        @foreach (var model in Models)
+        {
+            <MudSelectItem Value="@model">@model</MudSelectItem>
+        }
+    </MudSelect>
+}
+
+@code {
+    [Parameter]
+    public ProviderConfig Config { get; set; } = new();
+
+    [Parameter]
+    public EventCallback<ProviderConfig> OnLoadModels { get; set; }
+
+    [Parameter]
+    public List<string> Models { get; set; } = new();
+
+    [Parameter]
+    public bool IsLoading { get; set; }
+}

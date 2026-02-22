@@ -1,0 +1,114 @@
+@page "/"
+@using AiAgileTeam.Models
+@inject SettingsService SettingsService
+@inject NavigationManager NavigationManager
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+
+<MudText Typo="Typo.h4" GutterBottom="true">AI Agile Team Session Setup</MudText>
+
+@if (_settings == null)
+{
+    <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+}
+else
+{
+    <MudCard Class="mb-4">
+        <MudCardContent>
+            <MudTable Items="@_settings.Agents" Hover="true" Breakpoint="Breakpoint.Sm">
+                <ToolBarContent>
+                    <MudText Typo="Typo.h6">Team Members</MudText>
+                    <MudSpacer />
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="OpenAddAgentDialog">Add Agent</MudButton>
+                </ToolBarContent>
+                <HeaderContent>
+                    <MudTh>Include</MudTh>
+                    <MudTh>Name</MudTh>
+                    <MudTh>Role</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd DataLabel="Include">
+                        <MudCheckBox T="bool" @bind-Value="@context.IsSelected" Color="Color.Primary" />
+                    </MudTd>
+                    <MudTd DataLabel="Name">@context.Name</MudTd>
+                    <MudTd DataLabel="Role">@context.Role</MudTd>
+                </RowTemplate>
+            </MudTable>
+        </MudCardContent>
+    </MudCard>
+
+    <MudCard Class="mb-4">
+        <MudCardContent>
+            <MudTextField Label="Your Query / Task" @bind-Value="_query" Lines="4" Required="true" RequiredError="Query is required" />
+            
+            <MudCheckBox T="bool" @bind-Value="_enableClarification" Color="Color.Primary" Class="mt-3">
+                Enable Clarification Agent
+            </MudCheckBox>
+        </MudCardContent>
+        <MudCardActions>
+            <MudButton Variant="Variant.Filled" Color="Color.Success" OnClick="StartSession" Disabled="@string.IsNullOrWhiteSpace(_query)">
+                Start Session
+            </MudButton>
+        </MudCardActions>
+    </MudCard>
+}
+
+@code {
+    private AppSettings _settings;
+    private string _query = "";
+    private bool _enableClarification = false;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _settings = await SettingsService.LoadSettingsAsync();
+    }
+
+    private async Task OpenAddAgentDialog()
+    {
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small, FullWidth = true };
+        var dialog = await DialogService.ShowAsync<AddAgentModal>("Add Custom Agent", options);
+        var result = await dialog.Result;
+
+        if (!result.Canceled)
+        {
+            if (result.Data is AgentConfig newAgent)
+            {
+                _settings.Agents.Add(newAgent);
+                await SettingsService.SaveSettingsAsync(_settings);
+                StateHasChanged();
+            }
+        }
+    }
+
+    private void StartSession()
+    {
+        // Simple validation of settings before starting session
+        bool keyMissing = false;
+        if (_settings.Mode == "global")
+        {
+            if (string.IsNullOrWhiteSpace(_settings.Global.ApiKey)) keyMissing = true;
+        }
+        else
+        {
+            var selectedAgents = _settings.Agents.Where(a => a.IsSelected);
+            if (!selectedAgents.Any() || selectedAgents.Any(a => string.IsNullOrWhiteSpace(a.ProviderSettings.ApiKey)))
+            {
+                keyMissing = true;
+            }
+        }
+
+        if (keyMissing)
+        {
+            Snackbar.Add("API Keys are missing. Please configure them in Settings.", Severity.Error);
+            NavigationManager.NavigateTo("/settings");
+            return;
+        }
+
+        var uri = NavigationManager.GetUriWithQueryParameters("/session", new Dictionary<string, object?> {
+            { "query", _query },
+            { "clarify", _enableClarification }
+        });
+        
+        NavigationManager.NavigateTo(uri);
+    }
+}

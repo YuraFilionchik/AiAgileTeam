@@ -1,0 +1,32 @@
+@using AiAgileTeam.Models
+
+<MudDialog>
+    <DialogContent>
+        <MudTextField Label="Agent Name" @bind-Value="_agent.Name" Class="mb-3" />
+        <MudTextField Label="Role" @bind-Value="_agent.Role" Class="mb-3" />
+        <MudTextField Label="System Prompt" @bind-Value="_agent.SystemPrompt" Lines="4" Class="mb-3" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" OnClick="Submit">Add Agent</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter]
+    MudBlazor.IMudDialogInstance MudDialog { get; set; }
+
+    private AgentConfig _agent = new();
+
+    void Submit()
+    {
+        if (string.IsNullOrWhiteSpace(_agent.Name) || string.IsNullOrWhiteSpace(_agent.Role))
+        {
+            return; // Can add validation
+        }
+
+        MudDialog.Close(DialogResult.Ok(_agent));
+    }
+
+    void Cancel() => MudDialog.Cancel();
+}
