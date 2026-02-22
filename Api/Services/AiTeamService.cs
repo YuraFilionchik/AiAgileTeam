@@ -8,21 +8,29 @@ namespace AiAgileTeam.Services;
 
 public class AiTeamService
 {
+    private readonly HttpClient _httpClient;
+
+    public AiTeamService(HttpClient httpClient)
+    {
+        _httpClient = httpClient;
+    }
+
     public IChatCompletionService CreateChatService(ProviderConfig config)
     {
         var builder = Kernel.CreateBuilder();
+        builder.Services.AddSingleton(_httpClient);
 
         switch (config.Provider)
         {
             case "OpenAI":
-                builder.AddOpenAIChatCompletion(config.Model, config.ApiKey);
+                builder.AddOpenAIChatCompletion(config.Model, config.ApiKey, httpClient: _httpClient);
                 break;
             case "AzureOpenAI":
-                builder.AddAzureOpenAIChatCompletion(config.Model, config.Endpoint, config.ApiKey);
+                builder.AddAzureOpenAIChatCompletion(config.Model, config.Endpoint, config.ApiKey, httpClient: _httpClient);
                 break;
             case "GoogleGemini":
                 #pragma warning disable SKEXP0070
-                builder.AddGoogleAIGeminiChatCompletion(config.Model, config.ApiKey);
+                builder.AddGoogleAIGeminiChatCompletion(config.Model, config.ApiKey, httpClient: _httpClient);
                 #pragma warning restore SKEXP0070
                 break;
             default:
@@ -38,6 +46,7 @@ public class AiTeamService
         var chatService = CreateChatService(providerConfig);
         var builderInternal = Kernel.CreateBuilder();
         builderInternal.Services.AddSingleton(chatService);
+        builderInternal.Services.AddSingleton(_httpClient);
         var kernel = builderInternal.Build();
 
         var agent = new ChatCompletionAgent

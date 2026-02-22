@@ -1,0 +1,6 @@
+@AiAgileTeam.Api_HostAddress = http://localhost:5270
+
+GET {{AiAgileTeam.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

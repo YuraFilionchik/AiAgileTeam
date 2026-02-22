@@ -1,12 +1,9 @@
 @page "/session"
+@using System.Net.Http.Json
 @using AiAgileTeam.Models
-@using Microsoft.SemanticKernel
-@using Microsoft.SemanticKernel.Agents
-@using Microsoft.SemanticKernel.Agents.Chat
-@using Microsoft.SemanticKernel.ChatCompletion
 @inject SettingsService SettingsService
-@inject AiTeamService TeamService
 @inject NavigationManager NavigationManager
+@inject IHttpClientFactory HttpClientFactory
 
 <MudText Typo="Typo.h5" GutterBottom="true">Session</MudText>
 
@@ -44,9 +41,6 @@ else
     private bool _isInitializing = true;
     private bool _isProcessing = false;
     private bool _isSessionComplete = false;
-
-    private AgentGroupChat _groupChat;
-    private ChatCompletionAgent _clarificationAgent;
     private bool _clarificationPhase = false;
     private int _clarificationQuestionsAsked = 0;
 
@@ -63,6 +57,48 @@ else
         await InitializeSessionAsync();
     }
 
+    private async Task ProcessApiStream(HttpResponseMessage response)
+    {
+        response.EnsureSuccessStatusCode();
+        var stream = await response.Content.ReadAsStreamAsync();
+        
+        string currentAuthor = "";
+        ChatMessage uiMessage = null;
+
+        await foreach (var message in System.Text.Json.JsonSerializer.DeserializeAsyncEnumerable<StreamingMessageDto>(stream, new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true }))
+        {
+            if (message == null) continue;
+
+            if (currentAuthor != message.Author || uiMessage == null)
+            {
+                currentAuthor = message.Author;
+                uiMessage = new ChatMessage { Author = currentAuthor, Content = "", IsUser = false };
+                _messages.Add(uiMessage);
+            }
+
+            uiMessage.Content += message.ContentPiece;
+            StateHasChanged();
+
+            if (message.IsComplete)
+            {
+                // Handle next steps logic if needed based on readiness
+                if (_clarificationPhase && (uiMessage.Content.Contains("[READY]") || _clarificationQuestionsAsked >= 2))
+                {
+                    _clarificationPhase = false;
+                    _messages.Add(new ChatMessage { Author = "System", Content = "Clarification complete. Starting team discussion...", IsUser = false });
+                    StateHasChanged();
+                    await StartTeamDiscussionAsync();
+                    return; // Break out of processing clarification stream as we just fired a new stream
+                }
+            }
+        }
+        
+        if (_clarificationPhase)
+        {
+             _clarificationQuestionsAsked++;
+        }
+    }
+
     private async Task InitializeSessionAsync()
     {
         try
@@ -70,30 +106,23 @@ else
             _isProcessing = true;
             _messages.Add(new ChatMessage { Author = "User", Content = Query, IsUser = true });
             
-            _groupChat = new AgentGroupChat();
-
-            if (Clarify)
+            _clarificationPhase = Clarify;
+            
+            var request = new SessionRequest
             {
-                _clarificationPhase = true;
-                ProviderConfig clarifyProvider = _settings.Mode == "global" ? _settings.Global : _settings.Agents.FirstOrDefault()?.ProviderSettings ?? new ProviderConfig();
+                Query = Query,
+                Clarify = Clarify,
+                Settings = _settings
+            };
 
-                var cBuilder = Kernel.CreateBuilder();
-                cBuilder.Services.AddSingleton(TeamService.CreateChatService(clarifyProvider));
+            using var httpClient = HttpClientFactory.CreateClient("ApiClient");
+            var response = await httpClient.PostAsJsonAsync("api/aiteam/session", request);
+            
+            await ProcessApiStream(response);
 
-                _clarificationAgent = new ChatCompletionAgent
-                {
-                    Name = "Clarification Agent",
-                    Instructions = "You are a Clarification Agent. Ask the user a maximum of 3 clarifying questions one by one. After receiving the answers, provide a summary and suggest a refined query. Say [READY] when you have collected enough info.",
-                    Kernel = cBuilder.Build()
-                };
-
-                _groupChat.AddChatMessage(new Microsoft.SemanticKernel.ChatMessageContent(AuthorRole.User, Query));
-                await ProcessAgentResponseAsync(_clarificationAgent);
-            }
-            else
+            if (!Clarify) 
             {
-                _groupChat.AddChatMessage(new Microsoft.SemanticKernel.ChatMessageContent(AuthorRole.User, Query));
-                await RunTeamDiscussionAsync();
+                _isSessionComplete = true; // For MVP if no clarification, the first stream handles discussion and completes
             }
         }
         catch (Exception ex)
@@ -108,6 +137,22 @@ else
         }
     }
 
+    private async Task StartTeamDiscussionAsync()
+    {
+         var request = new SessionRequest
+         {
+             Query = Query, // For a real implementation, we would send the full conversation history. MVP constraint.
+             Clarify = false, // Force false to trigger discussion logic
+             Settings = _settings
+         };
+         
+         using var httpClient = HttpClientFactory.CreateClient("ApiClient");
+         // Since we already did initialization via /session, we just use /message, passing false for clarification phase.
+         var response = await httpClient.PostAsJsonAsync($"api/aiteam/message?isClarificationPhase=false", request);
+         await ProcessApiStream(response);
+         _isSessionComplete = true;
+    }
+
     private async Task SendMessage()
     {
         if (string.IsNullOrWhiteSpace(_userInput)) return;
@@ -117,18 +162,23 @@ else
         _isProcessing = true;
         
         _messages.Add(new ChatMessage { Author = "User", Content = message, IsUser = true });
-        _groupChat.AddChatMessage(new Microsoft.SemanticKernel.ChatMessageContent(AuthorRole.User, message));
         StateHasChanged();
 
         try
         {
-            if (_clarificationPhase)
+            var request = new SessionRequest
             {
-                await ProcessAgentResponseAsync(_clarificationAgent);
-            }
-            else
+                Query = message, // For MVP, we're just sending the latest message
+                Settings = _settings
+            };
+
+            using var httpClient = HttpClientFactory.CreateClient("ApiClient");
+            var response = await httpClient.PostAsJsonAsync($"api/aiteam/message?isClarificationPhase={_clarificationPhase}", request);
+            await ProcessApiStream(response);
+            
+            if (!_clarificationPhase)
             {
-                await RunTeamDiscussionAsync();
+                _isSessionComplete = true;
             }
         }
         catch (Exception ex)
@@ -140,56 +190,5 @@ else
             _isProcessing = false;
             StateHasChanged();
         }
-    }
-
-    private async Task ProcessAgentResponseAsync(ChatCompletionAgent agent)
-    {
-        string currentContent = "";
-        var uiMessage = new ChatMessage { Author = agent.Name, Content = "", IsUser = false };
-        _messages.Add(uiMessage);
-        
-        await foreach (var message in _groupChat.InvokeAsync(agent))
-        {
-            currentContent += message.Content;
-            uiMessage.Content = currentContent;
-            StateHasChanged();
-        }
-
-        if (_clarificationPhase && (currentContent.Contains("[READY]") || _clarificationQuestionsAsked >= 3))
-        {
-            _clarificationPhase = false;
-            _messages.Add(new ChatMessage { Author = "System", Content = "Clarification complete. Starting team discussion...", IsUser = false });
-            StateHasChanged();
-            await RunTeamDiscussionAsync();
-        }
-        else if (_clarificationPhase)
-        {
-            _clarificationQuestionsAsked++;
-        }
-    }
-
-    private async Task RunTeamDiscussionAsync()
-    {
-        var agentsToRun = _settings.Agents.Where(a => a.IsSelected).ToList();
-        
-        foreach(var agentConfig in agentsToRun)
-        {
-            var agent = TeamService.CreateAgent(agentConfig, _settings);
-            
-            // Add a temporary loading message or direct streaming
-            string responseText = "";
-            var uiMessage = new ChatMessage { Author = agent.Name, Content = "", IsUser = false };
-            _messages.Add(uiMessage);
-            StateHasChanged();
-
-            await foreach(var message in _groupChat.InvokeAsync(agent))
-            {
-                responseText += message.Content;
-                uiMessage.Content = responseText;
-                StateHasChanged();
-            }
-        }
-
-        _isSessionComplete = true; // For MVP, discussion stops after all agents have spoken once.
     }
 }

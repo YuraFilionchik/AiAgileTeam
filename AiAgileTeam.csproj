@@ -6,6 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <ServiceWorkerAssetsManifest>service-worker-assets.js</ServiceWorkerAssetsManifest>
     <NoWarn>$(NoWarn);SKEXP0110;SKEXP0070;SKEXP0001</NoWarn>
+    <DefaultItemExcludes>$(DefaultItemExcludes);Api\**;Shared\**</DefaultItemExcludes>
   </PropertyGroup>
 
   <ItemGroup>
@@ -13,14 +14,14 @@
     <PackageReference Include="Markdig" Version="0.45.0" />
     <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly" Version="9.0.13" />
     <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.DevServer" Version="9.0.13" PrivateAssets="all" />
-    <PackageReference Include="Microsoft.SemanticKernel" Version="1.72.0" />
-    <PackageReference Include="Microsoft.SemanticKernel.Agents.Core" Version="1.72.0" />
-    <PackageReference Include="Microsoft.SemanticKernel.Connectors.Google" Version="1.72.0-alpha" />
+    <PackageReference Include="Microsoft.Extensions.Http" Version="9.0.2" />
     <PackageReference Include="MudBlazor" Version="9.0.0" />
   </ItemGroup>
-
   <ItemGroup>
     <ServiceWorker Include="wwwroot\service-worker.js" PublishedContent="wwwroot\service-worker.published.js" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="Shared\AiAgileTeam.Shared.csproj" />
   </ItemGroup>
 
 </Project>
