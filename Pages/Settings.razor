@@ -46,6 +46,10 @@ else
                 </MudCardHeader>
                 <MudCardContent>
                     <ProviderSettingsEditor Config="agent.ProviderSettings" OnLoadModels="LoadModels" Models="_models" IsLoading="_isLoadingModels" />
+                    <div class="mt-4 d-flex gap-4">
+                        <MudNumericField @bind-Value="agent.MaxTokensPerResponse" Label="Max Tokens" Min="100" Max="32000" Variant="Variant.Outlined" />
+                        <MudNumericField @bind-Value="agent.MaxRoundsPerSession" Label="Max Rounds" Min="1" Max="10" Variant="Variant.Outlined" />
+                    </div>
                 </MudCardContent>
             </MudCard>
         }

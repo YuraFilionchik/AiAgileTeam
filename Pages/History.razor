@@ -1,0 +1,61 @@
+@page "/history"
+@using AiAgileTeam.Models
+@using AiAgileTeam.Services
+@inject ChatSessionService SessionService
+@inject NavigationManager NavigationManager
+
+<MudText Typo="Typo.h4" GutterBottom="true">Chat History</MudText>
+
+@if (_sessions == null)
+{
+    <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+}
+else if (!_sessions.Any())
+{
+    <MudText Typo="Typo.body1">No sessions found.</MudText>
+}
+else
+{
+    <MudTable Items="@_sessions" Hover="true" Breakpoint="Breakpoint.Sm">
+        <HeaderContent>
+            <MudTh>Title</MudTh>
+            <MudTh>Created At</MudTh>
+            <MudTh>Updated At</MudTh>
+            <MudTh>Actions</MudTh>
+        </HeaderContent>
+        <RowTemplate>
+            <MudTd DataLabel="Title">@context.Title</MudTd>
+            <MudTd DataLabel="Created At">@context.CreatedAt.ToLocalTime().ToString("g")</MudTd>
+            <MudTd DataLabel="Updated At">@context.UpdatedAt.ToLocalTime().ToString("g")</MudTd>
+            <MudTd DataLabel="Actions">
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" OnClick="@(() => OpenSession(context.Id))">Open</MudButton>
+                <MudButton Variant="Variant.Filled" Color="Color.Error" Size="Size.Small" OnClick="@(() => DeleteSession(context.Id))" Class="ml-2">Delete</MudButton>
+            </MudTd>
+        </RowTemplate>
+    </MudTable>
+}
+
+@code {
+    private List<ChatSession> _sessions;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadSessions();
+    }
+
+    private async Task LoadSessions()
+    {
+        _sessions = await SessionService.GetAllSessionsAsync();
+    }
+
+    private void OpenSession(string id)
+    {
+        NavigationManager.NavigateTo($"/session/{id}");
+    }
+
+    private async Task DeleteSession(string id)
+    {
+        await SessionService.DeleteSessionAsync(id);
+        await LoadSessions();
+    }
+}

@@ -1,40 +1,76 @@
 @page "/session"
+@page "/session/{SessionId}"
 @using System.Net.Http.Json
 @using AiAgileTeam.Models
+@using AiAgileTeam.Services
 @inject SettingsService SettingsService
+@inject ChatSessionService SessionService
 @inject NavigationManager NavigationManager
 @inject IHttpClientFactory HttpClientFactory
+@using Microsoft.AspNetCore.Components.WebAssembly.Http
 
-<MudText Typo="Typo.h5" GutterBottom="true">Session</MudText>
+<MudGrid>
+    <MudItem xs="12" sm="4" md="3">
+        <MudPaper Elevation="1" Class="pa-4 flex-column" Style="height: 100%;">
+            <MudText Typo="Typo.h6" GutterBottom="true">Ai Team</MudText>
+            <MudText Typo="Typo.body2" Class="mb-4">Toggle agents in real-time</MudText>
+            
+            @if (_settings?.Agents != null)
+            {
+                <div class="d-flex flex-column gap-1">
+                    @foreach (var agent in _settings.Agents)
+                    {
+                        <MudSwitch Value="agent.IsSelected" ValueChanged="@((bool val) => ToggleAgentAsync(agent, val))" Disabled="@agent.IsMandatory" Color="Color.Primary" Label="@agent.Name" T="bool" />
+                    }
+                </div>
+            }
+        </MudPaper>
+    </MudItem>
+    <MudItem xs="12" sm="8" md="9" Class="d-flex flex-column" Style="height: 100%;">
+        <MudText Typo="Typo.h5" GutterBottom="true">Session</MudText>
 
-@if (_isInitializing)
-{
-    <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
-}
-else
-{
-    <ChatLog Messages="_messages" />
+        @if (_isInitializing)
+        {
+            <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+        }
+        else
+        {
+            <ChatLog Messages="_messages" />
 
-    @if (!_isSessionComplete)
-    {
-        <MudCard Class="mt-4">
-            <MudCardContent>
-                <MudTextField @bind-Value="_userInput" Label="Reply..." Lines="3" />
-                <MudButton Variant="Variant.Filled" Color="Color.Primary" Class="mt-2" OnClick="SendMessage" Disabled="_isProcessing">
-                    Send
-                </MudButton>
-            </MudCardContent>
-        </MudCard>
-    }
-}
+            @if (!_isSessionComplete)
+            {
+                <MudCard Class="mt-4">
+                    <MudCardContent>
+                        <MudTextField @bind-Value="_userInput" Label="Reply..." Lines="3" />
+                        <div class="d-flex align-center mt-2 gap-2">
+                            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SendMessage" Disabled="_isProcessing">
+                                Send
+                            </MudButton>
+                            @if (_isProcessing)
+                            {
+                                <MudButton Variant="Variant.Filled" Color="Color.Error" OnClick="StopProcessing">
+                                    Stop
+                                </MudButton>
+                            }
+                        </div>
+                    </MudCardContent>
+                </MudCard>
+            }
+        }
+    </MudItem>
+</MudGrid>
 
 @code {
+    [Parameter]
+    public string? SessionId { get; set; }
+
     [SupplyParameterFromQuery]
     public string Query { get; set; }
 
     [SupplyParameterFromQuery]
     public bool Clarify { get; set; }
 
+    private ChatSession _currentSession;
     private AppSettings _settings;
     private List<ChatMessage> _messages = new();
     private string _userInput = "";
@@ -43,9 +79,48 @@ else
     private bool _isSessionComplete = false;
     private bool _clarificationPhase = false;
     private int _clarificationQuestionsAsked = 0;
+    private CancellationTokenSource? _cts;
+    private string? _serverSessionId;
+
+    private async Task ToggleAgentAsync(AgentConfig agent, bool val)
+    {
+        agent.IsSelected = val;
+        await SettingsService.SaveSettingsAsync(_settings);
+        if (_currentSession != null)
+        {
+            _currentSession.SettingsSnapshot = _settings;
+            await SaveCurrentSessionAsync();
+        }
+    }
+
+    private void StopProcessing()
+    {
+        try
+        {
+            if (_cts != null && !_cts.IsCancellationRequested)
+            {
+                _cts.Cancel();
+            }
+        }
+        catch { }
+    }
 
     protected override async Task OnInitializedAsync()
     {
+        if (!string.IsNullOrEmpty(SessionId))
+        {
+            _currentSession = await SessionService.GetSessionAsync(SessionId);
+            if (_currentSession != null)
+            {
+                _settings = _currentSession.SettingsSnapshot;
+                _messages = _currentSession.Messages;
+                _isInitializing = false;
+                _clarificationPhase = false;
+                _isSessionComplete = false;
+                return;
+            }
+        }
+
         _settings = await SettingsService.LoadSettingsAsync();
         
         if (string.IsNullOrWhiteSpace(Query))
@@ -54,43 +129,74 @@ else
             return;
         }
 
+        _currentSession = new ChatSession
+        {
+            Title = Query.Length > 30 ? Query.Substring(0, 30) + "..." : Query,
+            SettingsSnapshot = _settings,
+            Messages = _messages
+        };
+
         await InitializeSessionAsync();
     }
 
-    private async Task ProcessApiStream(HttpResponseMessage response)
+    private async Task SaveCurrentSessionAsync()
+    {
+        if (_currentSession != null)
+        {
+            _currentSession.UpdatedAt = DateTime.UtcNow;
+            await SessionService.SaveSessionAsync(_currentSession);
+        }
+    }
+
+    private async Task ProcessApiStream(HttpResponseMessage response, CancellationToken cancellationToken)
     {
         response.EnsureSuccessStatusCode();
-        var stream = await response.Content.ReadAsStreamAsync();
+        var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         
         string currentAuthor = "";
         ChatMessage uiMessage = null;
 
-        await foreach (var message in System.Text.Json.JsonSerializer.DeserializeAsyncEnumerable<StreamingMessageDto>(stream, new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true }))
+        try
         {
-            if (message == null) continue;
-
-            if (currentAuthor != message.Author || uiMessage == null)
+            await foreach (var message in System.Text.Json.JsonSerializer.DeserializeAsyncEnumerable<StreamingMessageDto>(stream, new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true }, cancellationToken))
             {
-                currentAuthor = message.Author;
-                uiMessage = new ChatMessage { Author = currentAuthor, Content = "", IsUser = false };
-                _messages.Add(uiMessage);
-            }
+                if (message == null) continue;
 
-            uiMessage.Content += message.ContentPiece;
-            StateHasChanged();
-
-            if (message.IsComplete)
-            {
-                // Handle next steps logic if needed based on readiness
-                if (_clarificationPhase && (uiMessage.Content.Contains("[READY]") || _clarificationQuestionsAsked >= 2))
+                if (!string.IsNullOrEmpty(message.ServerSessionId))
                 {
-                    _clarificationPhase = false;
-                    _messages.Add(new ChatMessage { Author = "System", Content = "Clarification complete. Starting team discussion...", IsUser = false });
-                    StateHasChanged();
-                    await StartTeamDiscussionAsync();
-                    return; // Break out of processing clarification stream as we just fired a new stream
+                    _serverSessionId = message.ServerSessionId;
+                }
+
+                if (currentAuthor != message.Author || uiMessage == null)
+                {
+                    currentAuthor = message.Author;
+                    uiMessage = new ChatMessage { Author = currentAuthor, Content = "", IsUser = false };
+                    _messages.Add(uiMessage);
+                }
+
+                uiMessage.Content += message.ContentPiece;
+                StateHasChanged();
+
+                if (message.IsComplete)
+                {
+                    await SaveCurrentSessionAsync();
+                    
+                    if (_clarificationPhase && (uiMessage.Content.Contains("[READY]") || _clarificationQuestionsAsked >= 2))
+                    {
+                        _clarificationPhase = false;
+                        _messages.Add(new ChatMessage { Author = "System", Content = "Clarification complete. Starting team discussion...", IsUser = false });
+                        await SaveCurrentSessionAsync();
+                        StateHasChanged();
+                        await StartTeamDiscussionAsync();
+                        return;
+                    }
                 }
             }
+        }
+        catch (OperationCanceledException)
+        {
+            _messages.Add(new ChatMessage { Author = "System", Content = "[Stopped by user]", IsUser = false });
+            StateHasChanged();
         }
         
         if (_clarificationPhase)
@@ -105,6 +211,12 @@ else
         {
             _isProcessing = true;
             _messages.Add(new ChatMessage { Author = "User", Content = Query, IsUser = true });
+            _isInitializing = false;
+            await SaveCurrentSessionAsync();
+            StateHasChanged();
+            
+            _cts?.Dispose();
+            _cts = new CancellationTokenSource();
             
             _clarificationPhase = Clarify;
             
@@ -112,18 +224,29 @@ else
             {
                 Query = Query,
                 Clarify = Clarify,
-                Settings = _settings
+                Settings = _settings,
+                History = new List<ChatMessageDto>()
             };
 
             using var httpClient = HttpClientFactory.CreateClient("ApiClient");
-            var response = await httpClient.PostAsJsonAsync("api/aiteam/session", request);
+            var httpRequest = new HttpRequestMessage(HttpMethod.Post, "api/aiteam/session")
+            {
+                Content = JsonContent.Create(request)
+            };
+            httpRequest.SetBrowserResponseStreamingEnabled(true);
+            var response = await httpClient.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, _cts.Token);
+
             
-            await ProcessApiStream(response);
+            await ProcessApiStream(response, _cts.Token);
 
             if (!Clarify) 
             {
-                _isSessionComplete = true; // For MVP if no clarification, the first stream handles discussion and completes
+                // Removed _isSessionComplete = true to keep the input visible
             }
+        }
+        catch (OperationCanceledException)
+        {
+            // Handled
         }
         catch (Exception ex)
         {
@@ -131,6 +254,7 @@ else
         }
         finally
         {
+            await SaveCurrentSessionAsync();
             _isProcessing = false;
             _isInitializing = false;
             StateHasChanged();
@@ -139,18 +263,31 @@ else
 
     private async Task StartTeamDiscussionAsync()
     {
+         var history = string.IsNullOrEmpty(_serverSessionId) 
+             ? _messages.Select(m => new ChatMessageDto { Author = m.Author, Content = m.Content, IsUser = m.IsUser }).ToList()
+             : new List<ChatMessageDto>();
+             
          var request = new SessionRequest
          {
-             Query = Query, // For a real implementation, we would send the full conversation history. MVP constraint.
-             Clarify = false, // Force false to trigger discussion logic
-             Settings = _settings
+             Query = "",
+             Clarify = false,
+             Settings = _settings,
+             History = history,
+             ServerSessionId = _serverSessionId
          };
          
+         _cts?.Dispose();
+         _cts = new CancellationTokenSource();
+         
          using var httpClient = HttpClientFactory.CreateClient("ApiClient");
-         // Since we already did initialization via /session, we just use /message, passing false for clarification phase.
-         var response = await httpClient.PostAsJsonAsync($"api/aiteam/message?isClarificationPhase=false", request);
-         await ProcessApiStream(response);
-         _isSessionComplete = true;
+         var httpRequest = new HttpRequestMessage(HttpMethod.Post, $"api/aiteam/message?isClarificationPhase=false")
+         {
+             Content = JsonContent.Create(request)
+         };
+         httpRequest.SetBrowserResponseStreamingEnabled(true);
+         var response = await httpClient.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, _cts.Token);
+         await ProcessApiStream(response, _cts.Token);
+         await SaveCurrentSessionAsync();
     }
 
     private async Task SendMessage()
@@ -161,25 +298,44 @@ else
         _userInput = "";
         _isProcessing = true;
         
+        var historyBeforeCurrent = string.IsNullOrEmpty(_serverSessionId) 
+            ? _messages.Select(m => new ChatMessageDto { Author = m.Author, Content = m.Content, IsUser = m.IsUser }).ToList()
+            : new List<ChatMessageDto>();
+        
         _messages.Add(new ChatMessage { Author = "User", Content = message, IsUser = true });
+        await SaveCurrentSessionAsync();
         StateHasChanged();
 
         try
         {
+            _cts?.Dispose();
+            _cts = new CancellationTokenSource();
+
             var request = new SessionRequest
             {
-                Query = message, // For MVP, we're just sending the latest message
-                Settings = _settings
+                Query = message,
+                Settings = _settings,
+                History = historyBeforeCurrent,
+                ServerSessionId = _serverSessionId
             };
 
             using var httpClient = HttpClientFactory.CreateClient("ApiClient");
-            var response = await httpClient.PostAsJsonAsync($"api/aiteam/message?isClarificationPhase={_clarificationPhase}", request);
-            await ProcessApiStream(response);
+            var httpRequest = new HttpRequestMessage(HttpMethod.Post, $"api/aiteam/message?isClarificationPhase={_clarificationPhase}")
+            {
+                Content = JsonContent.Create(request)
+            };
+            httpRequest.SetBrowserResponseStreamingEnabled(true);
+            var response = await httpClient.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, _cts.Token);
+            await ProcessApiStream(response, _cts.Token);
             
             if (!_clarificationPhase)
             {
-                _isSessionComplete = true;
+                // Removed _isSessionComplete = true to keep the input visible
             }
+        }
+        catch (OperationCanceledException)
+        {
+            // Handled
         }
         catch (Exception ex)
         {
@@ -187,6 +343,7 @@ else
         }
         finally
         {
+            await SaveCurrentSessionAsync();
             _isProcessing = false;
             StateHasChanged();
         }

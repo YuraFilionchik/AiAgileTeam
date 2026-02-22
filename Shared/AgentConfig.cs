@@ -8,4 +8,7 @@ public class AgentConfig
     public string SystemPrompt { get; set; } = "";
     public ProviderConfig ProviderSettings { get; set; } = new();
     public bool IsSelected { get; set; } = true;
+    public bool IsMandatory { get; set; } = false;
+    public int MaxTokensPerResponse { get; set; } = 1000;
+    public int MaxRoundsPerSession { get; set; } = 3;
 }

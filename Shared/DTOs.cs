@@ -11,6 +11,10 @@ public class SessionRequest
 
     [Required]
     public AppSettings Settings { get; set; } = new();
+
+    public List<ChatMessageDto> History { get; set; } = new();
+    
+    public string? ServerSessionId { get; set; }
 }
 
 public class ChatMessageDto
@@ -25,4 +29,5 @@ public class StreamingMessageDto
     public string Author { get; set; } = "";
     public string ContentPiece { get; set; } = "";
     public bool IsComplete { get; set; }
+    public string? ServerSessionId { get; set; }
 }

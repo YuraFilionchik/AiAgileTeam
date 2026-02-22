@@ -28,7 +28,7 @@ else
                 </HeaderContent>
                 <RowTemplate>
                     <MudTd DataLabel="Include">
-                        <MudCheckBox T="bool" @bind-Value="@context.IsSelected" Color="Color.Primary" />
+                        <MudCheckBox T="bool" @bind-Value="@context.IsSelected" Disabled="@context.IsMandatory" Color="Color.Primary" />
                     </MudTd>
                     <MudTd DataLabel="Name">@context.Name</MudTd>
                     <MudTd DataLabel="Role">@context.Role</MudTd>

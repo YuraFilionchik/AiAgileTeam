@@ -14,7 +14,20 @@ builder.Services.AddScoped(sp => new HttpClient { BaseAddress = new Uri(builder.
 builder.Services.AddHttpClient("ApiClient", (sp, client) =>
 {
     var config = sp.GetRequiredService<IConfiguration>();
-    var baseUrl = config["AppSettings:ApiBaseUrl"] ?? "https://localhost:7135";
+    
+    // Get the base URL from configuration, or construct it dynamically based on the app's protocol
+    var baseUrl = config["AppSettings:ApiBaseUrl"];
+    
+    if (string.IsNullOrEmpty(baseUrl))
+    {
+        // Build API URL dynamically using the same protocol as the app
+        var appAddress = new Uri(builder.HostEnvironment.BaseAddress);
+        var scheme = appAddress.Scheme; // Will be http or https
+        var host = appAddress.Host;
+        var port = scheme == "https" ? 7135 : 5270;
+        baseUrl = $"{scheme}://{host}:{port}";
+    }
+    
     client.BaseAddress = new Uri(baseUrl);
 });
 
@@ -22,5 +35,5 @@ builder.Services.AddHttpClient("ApiClient", (sp, client) =>
 builder.Services.AddMudServices();
 builder.Services.AddBlazoredLocalStorage();
 builder.Services.AddScoped<SettingsService>();
-
+builder.Services.AddScoped<ChatSessionService>();
 await builder.Build().RunAsync();

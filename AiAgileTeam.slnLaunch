@@ -1,0 +1,17 @@
+[
+  {
+    "Name": "Core+API",
+    "Projects": [
+      {
+        "Path": "AiAgileTeam.csproj",
+        "Action": "Start",
+        "DebugTarget": "http"
+      },
+      {
+        "Path": "Api\\AiAgileTeam.Api.csproj",
+        "Action": "Start",
+        "DebugTarget": "http"
+      }
+    ]
+  }
+]

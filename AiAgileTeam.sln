@@ -4,6 +4,9 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 VisualStudioVersion = 17.14.37012.4
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AiAgileTeam", "AiAgileTeam.csproj", "{736A6501-4DCF-4D9E-A85A-3C48D6AFA9CB}"
+	ProjectSection(ProjectDependencies) = postProject
+		{7617C305-CEE1-4B5B-830E-BBCF744DD888} = {7617C305-CEE1-4B5B-830E-BBCF744DD888}
+	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Api", "Api", "{D82C56D6-B2CD-F611-9E31-04638F7EC30E}"
 EndProject

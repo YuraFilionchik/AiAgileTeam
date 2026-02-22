@@ -1,12 +1,25 @@
 using AiAgileTeam.Services;
+using Polly;
+using Polly.Extensions.Http;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers();
 builder.Services.AddOpenApi();
 
-builder.Services.AddHttpClient<AiTeamService>();
-builder.Services.AddScoped<AiTeamService>();
+builder.Services.AddSingleton<SessionStore>();
+
+static IAsyncPolicy<HttpResponseMessage> GetRetryPolicy()
+{
+    return HttpPolicyExtensions
+        .HandleTransientHttpError()
+        .OrResult(msg => msg.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+        .WaitAndRetryAsync(3, retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt)));
+}
+
+builder.Services.AddHttpClient("AiTeamClient")
+    .AddPolicyHandler(GetRetryPolicy());
+builder.Services.AddSingleton<AiTeamService>();
 
 builder.Services.AddCors(options =>
 {

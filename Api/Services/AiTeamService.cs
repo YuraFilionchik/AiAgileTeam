@@ -10,13 +10,23 @@ public class AiTeamService
 {
     private readonly HttpClient _httpClient;
 
-    public AiTeamService(HttpClient httpClient)
+    public AiTeamService(IHttpClientFactory httpClientFactory)
     {
-        _httpClient = httpClient;
+        _httpClient = httpClientFactory.CreateClient("AiTeamClient");
     }
 
     public IChatCompletionService CreateChatService(ProviderConfig config)
     {
+        if (string.IsNullOrWhiteSpace(config.ApiKey) || config.ApiKey.Contains("[") || config.ApiKey.Contains("YOUR") || config.ApiKey.Contains("GCP_API_KEY"))
+        {
+            throw new ArgumentException($"API Key is required and appears to be not configured for provider {config.Provider}");
+        }
+
+        if (config.Provider == "AzureOpenAI" && string.IsNullOrWhiteSpace(config.Endpoint))
+        {
+            throw new ArgumentException("Endpoint is required for Azure OpenAI");
+        }
+
         var builder = Kernel.CreateBuilder();
         builder.Services.AddSingleton(_httpClient);
 
@@ -49,11 +59,17 @@ public class AiTeamService
         builderInternal.Services.AddSingleton(_httpClient);
         var kernel = builderInternal.Build();
 
+        if (agentConfig.MaxTokensPerResponse < 100) agentConfig.MaxTokensPerResponse = 1000;
+        if (agentConfig.MaxRoundsPerSession < 1) agentConfig.MaxRoundsPerSession = 3;
+
         var agent = new ChatCompletionAgent
         {
             Kernel = kernel,
             Name = agentConfig.Name,
-            Instructions = agentConfig.SystemPrompt
+            Instructions = agentConfig.SystemPrompt,
+            Arguments = new KernelArguments(
+                new PromptExecutionSettings { ExtensionData = new Dictionary<string, object>
+                    { ["max_tokens"] = agentConfig.MaxTokensPerResponse } })
         };
 
         return agent;
