@@ -54,7 +54,11 @@ public class AiTeamController : ControllerBase
             clarificationAgent = new ChatCompletionAgent
             {
                 Name = "Clarification Agent",
-                Instructions = "You are a Clarification Agent. Ask the user a maximum of 3 clarifying questions one by one. After receiving the answers, provide a summary and suggest a refined query. Say [READY] when you have collected enough info.",
+                Instructions = "You are a Requirements Analyst. Your goal is to refine the user's initial request into a clear project brief.\n\n" +
+                               "1. Ask up to 3 targeted questions to clarify the project's purpose, target audience, and key technical constraints.\n" +
+                               "2. Ask questions one by one. Do not overwhelm the user.\n" +
+                               "3. Once you have enough information, provide a structured 'Project Brief' summary.\n" +
+                               "4. End your final summary with the exact word [READY].",
                 Kernel = cBuilder.Build()
             };
             
@@ -109,7 +113,11 @@ public class AiTeamController : ControllerBase
             var clarificationAgent = new ChatCompletionAgent
             {
                 Name = "Clarification Agent",
-                Instructions = "You are a Clarification Agent. Ask the user a maximum of 3 clarifying questions one by one. After receiving the answers, provide a summary and suggest a refined query. Say [READY] when you have collected enough info.",
+                Instructions = "You are a Requirements Analyst. Your goal is to refine the user's initial request into a clear project brief.\n\n" +
+                               "1. Ask up to 3 targeted questions to clarify the project's purpose, target audience, and key technical constraints.\n" +
+                               "2. Ask questions one by one. Do not overwhelm the user.\n" +
+                               "3. Once you have enough information, provide a structured 'Project Brief' summary.\n" +
+                               "4. End your final summary with the exact word [READY].",
                 Kernel = cBuilder.Build()
             };
 
@@ -195,17 +203,17 @@ public class AiTeamController : ControllerBase
         {
             var agentsToRun = settings.Agents.Where(a => a.IsSelected).ToList();
             var skAgents = new List<ChatCompletionAgent>();
-            ChatCompletionAgent? scrumMaster = null;
+            ChatCompletionAgent? projectManager = null;
 
             foreach (var agentConfig in agentsToRun)
             {
                 var agent = _teamService.CreateAgent(agentConfig, settings);
                 skAgents.Add(agent);
                 groupChat.AddAgent(agent);
-                if (agent.Name == "Scrum Master") { scrumMaster = agent; }
+                if (agent.Name == "Project Manager") { projectManager = agent; }
             }
 
-            if (scrumMaster != null)
+            if (projectManager != null)
             {
                 var agentNames = string.Join(", ", skAgents.Select(a => $"'{a.Name}'"));
                 groupChat.ExecutionSettings = new()
@@ -213,17 +221,27 @@ public class AiTeamController : ControllerBase
                     SelectionStrategy = new KernelFunctionSelectionStrategy(
                         KernelFunctionFactory.CreateFromPrompt(
                             $$$"""
-                            You are the moderator deciding who speaks next in a Scrum team discussion.
+                            You are the moderator deciding who speaks next in a software development team discussion.
+                            Your goal is to ensure a logical flow from requirements to design and finally to planning.
                             
                             ## Conversation so far:
                             {{$history}}
                             
-                            ## Rules:
-                            1. If the conversation just started or has no messages, choose 'Scrum Master'.
-                            2. After Scrum Master sets the agenda, choose the most relevant specialist.
-                            3. Do NOT let the same specialist speak twice in a row — rotate between experts.
-                            4. After 2-3 specialists have spoken, return to 'Scrum Master' to synthesize.
-                            5. If Scrum Master said '[DONE]', choose 'Scrum Master' to conclude.
+                            ## Orchestration Logic:
+                            1. **Initialization**: If the conversation just started, choose 'Project Manager'.
+                            2. **Specialist Input**: After Project Manager sets the stage, call specialists in this preferred order:
+                               - 'Product Owner' for requirements and user stories.
+                               - 'Architect' for high-level design and tech stack.
+                               - 'Developer' for implementation details.
+                               - 'QA Engineer' for testing and quality.
+                               - 'Scrum Master' for agile process and roadmap.
+                            3. **Synthesis**: After each major specialist contribution, you may return to 'Project Manager' to summarize or ask for another specialist's input.
+                            4. **Finalization**: If all relevant areas are covered, choose 'Project Manager' to provide the final SRS document.
+                            5. **Termination**: If 'Project Manager' has already provided the final plan and said '[DONE]', choose 'Project Manager' to officially end.
+
+                            ## Constraints:
+                            - Do NOT let the same specialist speak twice in a row.
+                            - Ensure all participants get a chance to contribute if their expertise is needed for the user's task.
                             
                             ## Available participants:
                             {{{agentNames}}}
@@ -231,11 +249,11 @@ public class AiTeamController : ControllerBase
                             Respond with ONLY the exact name. No quotes, no explanation.
                             """
                         ),
-                        scrumMaster.Kernel)
+                        projectManager.Kernel)
                     {
                         ResultParser = (result) => {
                             var val = result.GetValue<string>();
-                            if (val == null) return "Scrum Master";
+                            if (val == null) return "Project Manager";
                             // Trim quotes, whitespace, and common punctuation
                             return val.Trim('"', '\'', ' ', '\n', '\r', '.', ',', ';', ':').Trim();
                         },
@@ -244,23 +262,21 @@ public class AiTeamController : ControllerBase
                     TerminationStrategy = new KernelFunctionTerminationStrategy(
                         KernelFunctionFactory.CreateFromPrompt(
                             $$$"""
-                            Review the conversation below and determine if the team discussion is complete.
+                            Review the conversation below and determine if the team has successfully completed the software planning task.
                             
                             ## Conversation:
                             {{$history}}
                             
-                            ## Completion criteria:
-                            - The Scrum Master has presented a final, comprehensive plan OR the team has reached a consensus.
-                            - The original user request is addressed.
-                            - OR the conversation is clearly stalling or repeating itself.
-                            - The Scrum Master has concluded with exactly '[DONE]'.
-                            
-                            IMPORTANT: If the plan is ready, even if '[DONE]' is missing but the context implies finality, respond 'yes'.
+                            ## Termination Criteria (Must meet all):
+                            1. All requested aspects (requirements, architecture, implementation, QA) have been discussed by relevant experts.
+                            2. The 'Project Manager' has delivered a final, structured summary or SRS document.
+                            3. The 'Project Manager' has explicitly concluded with '[DONE]'.
+                            4. If the conversation is clearly looping or no new information is being added, you may terminate.
                             
                             Respond with ONLY 'yes' if complete, or 'no' otherwise.
                             """
                         ),
-                        scrumMaster.Kernel)
+                        projectManager.Kernel)
                     {
                         ResultParser = (result) => {
                             var val = result.GetValue<string>();
@@ -329,7 +345,7 @@ public class AiTeamController : ControllerBase
                         
                         if (firstChunk || !string.IsNullOrEmpty(message.AuthorName)) 
                         {
-                            yield return new StreamingMessageDto { Author = "System", ContentPiece = $"\r\n*[Scrum Master gives floor to {currentAuthor}...]*\r\n\r\n", IsComplete = true, ServerSessionId = serverSessionId };
+                            yield return new StreamingMessageDto { Author = "System", ContentPiece = $"\r\n*[Project Manager gives floor to {currentAuthor}...]*\r\n\r\n", IsComplete = true, ServerSessionId = serverSessionId };
                         }
                         
                         firstChunk = false;
