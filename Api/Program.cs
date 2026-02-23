@@ -1,6 +1,9 @@
 using AiAgileTeam.Services;
 using Polly;
 using Polly.Extensions.Http;
+using QuestPDF.Infrastructure;
+
+QuestPDF.Settings.License = LicenseType.Community;
 
 var builder = WebApplication.CreateBuilder(args);
 

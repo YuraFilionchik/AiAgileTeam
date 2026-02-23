@@ -7,6 +7,7 @@
 @inject ChatSessionService SessionService
 @inject NavigationManager NavigationManager
 @inject IHttpClientFactory HttpClientFactory
+@inject IJSRuntime JSRuntime
 @using Microsoft.AspNetCore.Components.WebAssembly.Http
 
 <MudGrid>
@@ -52,6 +53,22 @@
                                     Stop
                                 </MudButton>
                             }
+                        </div>
+                    </MudCardContent>
+                </MudCard>
+            }
+            else
+            {
+                <MudCard Class="mt-4" Style="border: 2px solid var(--mud-palette-success);">
+                    <MudCardContent>
+                        <div class="d-flex align-center justify-space-between">
+                            <div>
+                                <MudText Typo="Typo.h6">Session Complete</MudText>
+                                <MudText Typo="Typo.body2">The virtual team has finished their work. You can download the full report below.</MudText>
+                            </div>
+                            <MudButton Variant="Variant.Filled" Color="Color.Secondary" OnClick="DownloadReportAsync" StartIcon="@Icons.Material.Filled.Download" Size="Size.Large">
+                                Download Report (.pdf)
+                            </MudButton>
                         </div>
                     </MudCardContent>
                 </MudCard>
@@ -181,6 +198,12 @@
                 {
                     await SaveCurrentSessionAsync();
                     
+                    if (uiMessage.Content.Contains("[DONE]"))
+                    {
+                        _isSessionComplete = true;
+                        StateHasChanged();
+                    }
+
                     if (_clarificationPhase && (uiMessage.Content.Contains("[READY]") || _clarificationQuestionsAsked >= 2))
                     {
                         _clarificationPhase = false;
@@ -346,6 +369,37 @@
             await SaveCurrentSessionAsync();
             _isProcessing = false;
             StateHasChanged();
+        }
+    }
+
+    private async Task DownloadReportAsync()
+    {
+        try
+        {
+            var request = new ReportRequest
+            {
+                Title = _currentSession?.Title ?? "Ai Team Session",
+                Messages = _messages.Select(m => new ChatMessageDto
+                {
+                    Author = m.Author,
+                    Content = m.Content,
+                    IsUser = m.IsUser
+                }).ToList()
+            };
+
+            using var httpClient = HttpClientFactory.CreateClient("ApiClient");
+            var response = await httpClient.PostAsJsonAsync("api/aiteam/report", request);
+            response.EnsureSuccessStatusCode();
+
+            var fileStream = await response.Content.ReadAsStreamAsync();
+            using var streamRef = new DotNetStreamReference(stream: fileStream);
+
+            var fileName = $"Report_{request.Title.Replace(" ", "_")}.pdf";
+            await JSRuntime.InvokeVoidAsync("downloadFileFromStream", fileName, streamRef);
+        }
+        catch (Exception ex)
+        {
+             _messages.Add(new ChatMessage { Author = "System", Content = $"Error downloading report: {ex.Message}", IsUser = false });
         }
     }
 }
