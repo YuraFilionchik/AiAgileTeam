@@ -11,6 +11,7 @@ builder.Services.AddControllers();
 builder.Services.AddOpenApi();
 
 builder.Services.AddSingleton<SessionStore>();
+builder.Services.AddSingleton<MarkdownService>();
 
 static IAsyncPolicy<HttpResponseMessage> GetRetryPolicy()
 {

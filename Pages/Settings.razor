@@ -1,5 +1,6 @@
 @page "/settings"
 @using System.Text.Json
+@using AiAgileTeam.Models
 @inject SettingsService SettingsService
 @inject ISnackbar Snackbar
 @inject HttpClient Http
@@ -13,46 +14,60 @@
 else
 {
     <MudCard Class="mb-4">
+        <MudCardHeader>
+            <CardHeaderContent>
+                <MudText Typo="Typo.h6">API Key Settings</MudText>
+            </CardHeaderContent>
+        </MudCardHeader>
         <MudCardContent>
-            <MudRadioGroup T="string" @bind-Value="_settings.Mode">
-                <MudRadio Value="@("global")" Color="Color.Primary">Global Settings</MudRadio>
-                <MudRadio Value="@("per-agent")" Color="Color.Secondary">Per-Agent Settings</MudRadio>
+            <MudRadioGroup T="string" @bind-Value="_settings.ApiKeyMode" Class="mb-4">
+                <MudRadio Value="@("global")" Color="Color.Primary">Global API Key (same for all agents)</MudRadio>
+                <MudRadio Value="@("per-agent")" Color="Color.Secondary">Per-Agent API Key (each agent can use different provider)</MudRadio>
             </MudRadioGroup>
+            
+            @if (_settings.ApiKeyMode == "global")
+            {
+                <MudDivider Class="mb-4" />
+                <MudText Typo="Typo.subtitle1" Class="mb-2">Global API Configuration</MudText>
+                <ApiSettingsEditor Config="_settings.GlobalApi" />
+            }
         </MudCardContent>
     </MudCard>
 
-    @if (_settings.Mode == "global")
+    <MudText Typo="Typo.h5" Class="mb-2">Agent Settings</MudText>
+    
+    @foreach (var agent in _settings.Agents)
     {
         <MudCard Class="mb-4">
             <MudCardHeader>
                 <CardHeaderContent>
-                    <MudText Typo="Typo.h6">Global Provider Settings</MudText>
+                    <div class="d-flex align-center gap-2 flex-wrap">
+                        <MudTextField @bind-Value="agent.DisplayName" Label="Name" Variant="Variant.Outlined" Margin="Margin.Dense" Style="max-width: 200px;" />
+                        <MudChip T="string" Color="Color.Info" Size="Size.Small">@agent.Role</MudChip>
+                        @if (agent.IsMandatory)
+                        {
+                            <MudChip T="string" Color="Color.Warning" Size="Size.Small">Mandatory</MudChip>
+                        }
+                    </div>
                 </CardHeaderContent>
             </MudCardHeader>
             <MudCardContent>
-                <ProviderSettingsEditor Config="_settings.Global" OnLoadModels="LoadModels" Models="_models" IsLoading="_isLoadingModels" />
+                @if (_settings.ApiKeyMode == "per-agent")
+                {
+                    <MudText Typo="Typo.subtitle2" Class="mb-2">API Configuration</MudText>
+                    <ApiSettingsEditor Config="agent.ApiSettings ??= new ApiConfig()" />
+                    <MudDivider Class="my-4" />
+                }
+                
+                <MudText Typo="Typo.subtitle2" Class="mb-2">Model Configuration</MudText>
+                <ModelSettingsEditor 
+                    Config="agent.ModelSettings" 
+                    ApiConfig="GetApiConfigForAgent(agent)"
+                    OnLoadModels="LoadModels"
+                    Models="_models"
+                    IsLoading="_isLoadingModels" />
             </MudCardContent>
         </MudCard>
-    }
-    else
-    {
-        @foreach (var agent in _settings.Agents)
-        {
-            <MudCard Class="mb-4">
-                <MudCardHeader>
-                    <CardHeaderContent>
-                        <MudText Typo="Typo.h6">Agent: @agent.Name (@agent.Role)</MudText>
-                    </CardHeaderContent>
-                </MudCardHeader>
-                <MudCardContent>
-                    <ProviderSettingsEditor Config="agent.ProviderSettings" OnLoadModels="LoadModels" Models="_models" IsLoading="_isLoadingModels" />
-                    <div class="mt-4 d-flex gap-4">
-                        <MudNumericField @bind-Value="agent.MaxTokensPerResponse" Label="Max Tokens" Min="100" Max="32000" Variant="Variant.Outlined" />
-                        <MudNumericField @bind-Value="agent.MaxRoundsPerSession" Label="Max Rounds" Min="1" Max="10" Variant="Variant.Outlined" />
-                    </div>
-                </MudCardContent>
-            </MudCard>
-        }
     }
 
     <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveSettings">Save Settings</MudButton>
@@ -68,13 +83,22 @@ else
         _settings = await SettingsService.LoadSettingsAsync();
     }
 
+    private ApiConfig GetApiConfigForAgent(AgentConfig agent)
+    {
+        if (_settings.ApiKeyMode == "global")
+        {
+            return _settings.GlobalApi;
+        }
+        return agent.ApiSettings ?? _settings.GlobalApi;
+    }
+
     private async Task SaveSettings()
     {
         await SettingsService.SaveSettingsAsync(_settings);
         Snackbar.Add("Settings saved successfully.", Severity.Success);
     }
 
-    private async Task LoadModels(ProviderConfig config)
+    private async Task LoadModels(ApiConfig config)
     {
         _isLoadingModels = true;
         _models.Clear();

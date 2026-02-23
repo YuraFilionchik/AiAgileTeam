@@ -21,7 +21,7 @@
                 <div class="d-flex flex-column gap-1">
                     @foreach (var agent in _settings.Agents)
                     {
-                        <MudSwitch Value="agent.IsSelected" ValueChanged="@((bool val) => ToggleAgentAsync(agent, val))" Disabled="@agent.IsMandatory" Color="Color.Primary" Label="@agent.Name" T="bool" />
+                        <MudSwitch Value="agent.IsSelected" ValueChanged="@((bool val) => ToggleAgentAsync(agent, val))" Disabled="@agent.IsMandatory" Color="Color.Primary" Label="@agent.DisplayName" T="bool" />
                     }
                 </div>
             }
@@ -169,42 +169,44 @@
     {
         response.EnsureSuccessStatusCode();
         var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-        
+
         string currentAuthor = "";
         ChatMessage uiMessage = null;
+        bool lastMessageWasComplete = false;
+        int messageCount = 0;
 
         try
         {
             await foreach (var message in System.Text.Json.JsonSerializer.DeserializeAsyncEnumerable<StreamingMessageDto>(stream, new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true }, cancellationToken))
             {
                 if (message == null) continue;
+                
+                messageCount++;
+                Console.WriteLine($"[Session.razor] Received message #{messageCount}: Author='{message.Author}', ContentPiece='{message.ContentPiece?.Substring(0, Math.Min(50, message.ContentPiece?.Length ?? 0))}', IsComplete={message.IsComplete}");
 
                 if (!string.IsNullOrEmpty(message.ServerSessionId))
                 {
                     _serverSessionId = message.ServerSessionId;
                 }
 
-                if (currentAuthor != message.Author || uiMessage == null)
+                // Handle completion signal from previous agent
+                if (message.IsComplete && !string.IsNullOrEmpty(message.Author) && message.Author != "System")
                 {
-                    currentAuthor = message.Author;
-                    uiMessage = new ChatMessage { Author = currentAuthor, Content = "", IsUser = false };
-                    _messages.Add(uiMessage);
-                }
-
-                uiMessage.Content += message.ContentPiece;
-                StateHasChanged();
-
-                if (message.IsComplete)
-                {
+                    Console.WriteLine($"[Session.razor] Agent '{message.Author}' completed their turn");
+                    lastMessageWasComplete = true;
                     await SaveCurrentSessionAsync();
-                    
-                    if (uiMessage.Content.Contains("[DONE]"))
+
+                    // Check for [DONE] in the last message from this agent
+                    var lastMessage = _messages.LastOrDefault(m => m.Author == message.Author);
+                    if (lastMessage != null && lastMessage.Content.Contains("[DONE]"))
                     {
+                        Console.WriteLine($"[Session.razor] [DONE] detected in last message from '{message.Author}'");
                         _isSessionComplete = true;
                         StateHasChanged();
+                        return; // Stop processing - session is complete
                     }
 
-                    if (_clarificationPhase && (uiMessage.Content.Contains("[READY]") || _clarificationQuestionsAsked >= 2))
+                    if (_clarificationPhase && (lastMessage?.Content.Contains("[READY]") == true || _clarificationQuestionsAsked >= 2))
                     {
                         _clarificationPhase = false;
                         _messages.Add(new ChatMessage { Author = "System", Content = "Clarification complete. Starting team discussion...", IsUser = false });
@@ -213,6 +215,31 @@
                         await StartTeamDiscussionAsync();
                         return;
                     }
+
+                    continue; // Skip further processing for completion messages
+                }
+
+                // Handle author change (including System messages about floor changes)
+                if (currentAuthor != message.Author || uiMessage == null)
+                {
+                    // Finalize previous message if it wasn't already marked complete
+                    if (uiMessage != null && !lastMessageWasComplete)
+                    {
+                        Console.WriteLine($"[Session.razor] Finalizing message for '{currentAuthor}' (length: {uiMessage.Content.Length})");
+                        await SaveCurrentSessionAsync();
+                    }
+
+                    currentAuthor = message.Author;
+                    uiMessage = new ChatMessage { Author = currentAuthor, Content = "", IsUser = false };
+                    _messages.Add(uiMessage);
+                    lastMessageWasComplete = false;
+                    Console.WriteLine($"[Session.razor] Switched to author '{currentAuthor}'");
+                }
+
+                if (!string.IsNullOrEmpty(message.ContentPiece))
+                {
+                    uiMessage.Content += message.ContentPiece;
+                    StateHasChanged();
                 }
             }
         }
@@ -221,11 +248,13 @@
             _messages.Add(new ChatMessage { Author = "System", Content = "[Stopped by user]", IsUser = false });
             StateHasChanged();
         }
-        
+
         if (_clarificationPhase)
         {
              _clarificationQuestionsAsked++;
         }
+        
+        Console.WriteLine($"[Session.razor] Stream processing complete. Total messages: {messageCount}");
     }
 
     private async Task InitializeSessionAsync()

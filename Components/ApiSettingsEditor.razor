@@ -1,0 +1,19 @@
+@using AiAgileTeam.Models
+
+<MudSelect T="string" Label="Provider" @bind-Value="Config.Provider" Class="mb-3">
+    <MudSelectItem Value="@("OpenAI")">OpenAI</MudSelectItem>
+    <MudSelectItem Value="@("AzureOpenAI")">Azure OpenAI</MudSelectItem>
+    <MudSelectItem Value="@("GoogleGemini")">Google Gemini</MudSelectItem>
+</MudSelect>
+
+@if (Config.Provider == "AzureOpenAI")
+{
+    <MudTextField Label="Endpoint" @bind-Value="Config.Endpoint" Class="mb-3" Placeholder="https://your-resource.openai.azure.com" />
+}
+
+<MudTextField Label="API Key" @bind-Value="Config.ApiKey" InputType="InputType.Password" Class="mb-3" />
+
+@code {
+    [Parameter]
+    public ApiConfig Config { get; set; } = new();
+}

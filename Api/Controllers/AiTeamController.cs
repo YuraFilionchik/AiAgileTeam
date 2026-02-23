@@ -19,11 +19,38 @@ public class AiTeamController : ControllerBase
 {
     private readonly AiTeamService _teamService;
     private readonly SessionStore _sessionStore;
+    private readonly MarkdownService _markdownService;
 
-    public AiTeamController(AiTeamService teamService, SessionStore sessionStore)
+    public AiTeamController(AiTeamService teamService, SessionStore sessionStore, MarkdownService markdownService)
     {
         _teamService = teamService;
         _sessionStore = sessionStore;
+        _markdownService = markdownService;
+    }
+
+    /// <summary>
+    /// Gets API config and model for clarification agent based on settings
+    /// </summary>
+    private (ApiConfig apiConfig, string model) GetClarificationConfig(AppSettings settings)
+    {
+        ApiConfig apiConfig;
+        string model;
+        
+        if (settings.ApiKeyMode == "global")
+        {
+            apiConfig = settings.GlobalApi;
+            // Use model from first selected agent or default
+            model = settings.Agents.FirstOrDefault(a => a.IsSelected)?.ModelSettings?.Model ?? "gpt-4";
+        }
+        else
+        {
+            // Use first selected agent's settings
+            var firstAgent = settings.Agents.FirstOrDefault(a => a.IsSelected);
+            apiConfig = firstAgent?.ApiSettings ?? settings.GlobalApi;
+            model = firstAgent?.ModelSettings?.Model ?? "gpt-4";
+        }
+        
+        return (apiConfig, model);
     }
 
     [HttpPost("session")]
@@ -49,15 +76,15 @@ public class AiTeamController : ControllerBase
 
         if (clarificationPhase)
         {
-            ProviderConfig clarifyProvider = request.Settings.Mode == "global" ? request.Settings.Global : request.Settings.Agents.FirstOrDefault()?.ProviderSettings ?? new ProviderConfig();
+            var (apiConfig, model) = GetClarificationConfig(request.Settings);
             
             var cBuilder = Kernel.CreateBuilder();
-            cBuilder.Services.AddSingleton(_teamService.CreateChatService(clarifyProvider));
+            cBuilder.Services.AddSingleton(_teamService.CreateChatService(apiConfig, model));
             
             clarificationAgent = new ChatCompletionAgent
             {
                 Name = "Clarification Agent",
-                Instructions = "You are a Requirements Analyst. Your goal is to refine the user's initial request into a clear project brief.\n\n" +
+                Instructions = "Your name is Clarification Agent. You are a Requirements Analyst. Your goal is to refine the user's initial request into a clear project brief.\n\n" +
                                "1. Ask up to 3 targeted questions to clarify the project's purpose, target audience, and key technical constraints.\n" +
                                "2. Ask questions one by one. Do not overwhelm the user.\n" +
                                "3. Once you have enough information, provide a structured 'Project Brief' summary.\n" +
@@ -85,6 +112,8 @@ public class AiTeamController : ControllerBase
     [HttpPost("report")]
     public IActionResult DownloadReport([FromBody] ReportRequest request)
     {
+        QuestPDF.Settings.License = QuestPDF.Infrastructure.LicenseType.Community;
+
         var document = Document.Create(container =>
         {
             container.Page(page =>
@@ -104,8 +133,16 @@ public class AiTeamController : ControllerBase
                     {
                         column.Item().PaddingVertical(5).Column(msgCol =>
                         {
-                            msgCol.Item().Text(message.Author).Bold().FontSize(10).FontColor(message.IsUser ? Colors.Green.Medium : Colors.Grey.Darken2);
-                            msgCol.Item().Text(message.Content);
+                            msgCol.Item()
+                                .PaddingBottom(2)
+                                .Text(message.Author)
+                                .Bold()
+                                .FontSize(10)
+                                .FontColor(message.IsUser ? Colors.Green.Medium : Colors.Grey.Darken2);
+
+                            msgCol.Item()
+                                .PaddingLeft(4)
+                                .Element(c => _markdownService.RenderMarkdown(c, message.Content));
                         });
                     }
                 });
@@ -148,15 +185,15 @@ public class AiTeamController : ControllerBase
 
         if (isClarificationPhase)
         {
-             ProviderConfig clarifyProvider = request.Settings.Mode == "global" ? request.Settings.Global : request.Settings.Agents.FirstOrDefault()?.ProviderSettings ?? new ProviderConfig();
+            var (apiConfig, model) = GetClarificationConfig(request.Settings);
             
             var cBuilder = Kernel.CreateBuilder();
-            cBuilder.Services.AddSingleton(_teamService.CreateChatService(clarifyProvider));
+            cBuilder.Services.AddSingleton(_teamService.CreateChatService(apiConfig, model));
             
             var clarificationAgent = new ChatCompletionAgent
             {
                 Name = "Clarification Agent",
-                Instructions = "You are a Requirements Analyst. Your goal is to refine the user's initial request into a clear project brief.\n\n" +
+                Instructions = "Your name is Clarification Agent. You are a Requirements Analyst. Your goal is to refine the user's initial request into a clear project brief.\n\n" +
                                "1. Ask up to 3 targeted questions to clarify the project's purpose, target audience, and key technical constraints.\n" +
                                "2. Ask questions one by one. Do not overwhelm the user.\n" +
                                "3. Once you have enough information, provide a structured 'Project Brief' summary.\n" +
@@ -214,7 +251,7 @@ public class AiTeamController : ControllerBase
                     currentContent += message.Content;
                     yield return new StreamingMessageDto
                     {
-                        Author = agent.Name, // Author is always the clarification agent
+                        Author = agent.Name ?? "Agent", // Author is always the clarification agent
                         ContentPiece = message.Content ?? "",
                         IsComplete = false,
                         ServerSessionId = serverSessionId
@@ -234,104 +271,54 @@ public class AiTeamController : ControllerBase
         }
         else
         {
-            yield return new StreamingMessageDto { Author = agent.Name, ContentPiece = "", IsComplete = true, ServerSessionId = serverSessionId };
+            yield return new StreamingMessageDto { Author = agent.Name ?? "Agent", ContentPiece = "", IsComplete = true, ServerSessionId = serverSessionId };
         }
     }
 
     private async IAsyncEnumerable<StreamingMessageDto> RunTeamDiscussionAsync(AppSettings settings, SessionData sessionData, string serverSessionId, [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var groupChat = sessionData.GroupChat;
-        
+
         if (!sessionData.IsConfigured)
         {
             var agentsToRun = settings.Agents.Where(a => a.IsSelected).ToList();
             var skAgents = new List<ChatCompletionAgent>();
             ChatCompletionAgent? projectManager = null;
 
+            Console.WriteLine($"[AiTeamController] Creating agents. Total selected: {agentsToRun.Count}");
             foreach (var agentConfig in agentsToRun)
             {
+                Console.WriteLine($"[AiTeamController]   - {agentConfig.DisplayName} ({agentConfig.Role}) IsSelected={agentConfig.IsSelected}, IsMandatory={agentConfig.IsMandatory}");
                 var agent = _teamService.CreateAgent(agentConfig, settings);
                 skAgents.Add(agent);
                 groupChat.AddAgent(agent);
-                if (agent.Name == "Project Manager") { projectManager = agent; }
+                // Find Project Manager by role, not by name
+                if (agentConfig.Role == "Project Manager") { projectManager = agent; }
             }
 
             if (projectManager != null)
             {
-                var agentNames = string.Join(", ", skAgents.Select(a => $"'{a.Name}'"));
+                // Создаём новую стратегию для каждой сессии (сброс состояния)
+                var selectionStrategy = new ResilientWorkflowSelectionStrategy();
+                
+                // Используем детерминированные стратегии вместо LLM-based для экономии токенов
                 groupChat.ExecutionSettings = new()
                 {
-                    SelectionStrategy = new KernelFunctionSelectionStrategy(
-                        KernelFunctionFactory.CreateFromPrompt(
-                            $$$"""
-                            You are the moderator deciding who speaks next in a software development team discussion.
-                            Your goal is to ensure a logical flow from requirements to design and finally to planning.
-                            
-                            ## Conversation so far:
-                            {{$history}}
-                            
-                            ## Orchestration Logic:
-                            1. **Initialization**: If the conversation just started, choose 'Project Manager'.
-                            2. **Specialist Input**: After Project Manager sets the stage, call specialists in this preferred order:
-                               - 'Product Owner' for requirements and user stories.
-                               - 'Architect' for high-level design and tech stack.
-                               - 'Developer' for implementation details.
-                               - 'QA Engineer' for testing and quality.
-                               - 'Scrum Master' for agile process and roadmap.
-                            3. **Synthesis**: After each major specialist contribution, you may return to 'Project Manager' to summarize or ask for another specialist's input.
-                            4. **Finalization**: If all relevant areas are covered, choose 'Project Manager' to provide the final SRS document.
-                            5. **Termination**: If 'Project Manager' has already provided the final plan and said '[DONE]', choose 'Project Manager' to officially end.
+                    // 1. Гибкая стратегия выбора с поддержкой прерываний и @упоминаний
+                    SelectionStrategy = selectionStrategy,
 
-                            ## Constraints:
-                            - Do NOT let the same specialist speak twice in a row.
-                            - Ensure all participants get a chance to contribute if their expertise is needed for the user's task.
-                            
-                            ## Available participants:
-                            {{{agentNames}}}
-                            
-                            Respond with ONLY the exact name. No quotes, no explanation.
-                            """
-                        ),
-                        projectManager.Kernel)
+                    // 2. Используем проверку на [DONE] только в последнем сообщении
+                    TerminationStrategy = new TokenSavingTerminationStrategy()
                     {
-                        ResultParser = (result) => {
-                            var val = result.GetValue<string>();
-                            if (val == null) return "Project Manager";
-                            // Trim quotes, whitespace, and common punctuation
-                            return val.Trim('"', '\'', ' ', '\n', '\r', '.', ',', ';', ':').Trim();
-                        },
-                        HistoryVariableName = "history"
-                    },
-                    TerminationStrategy = new KernelFunctionTerminationStrategy(
-                        KernelFunctionFactory.CreateFromPrompt(
-                            $$$"""
-                            Review the conversation below and determine if the team has successfully completed the software planning task.
-                            
-                            ## Conversation:
-                            {{$history}}
-                            
-                            ## Termination Criteria (Must meet all):
-                            1. All requested aspects (requirements, architecture, implementation, QA) have been discussed by relevant experts.
-                            2. The 'Project Manager' has delivered a final, structured summary or SRS document.
-                            3. The 'Project Manager' has explicitly concluded with '[DONE]'.
-                            4. If the conversation is clearly looping or no new information is being added, you may terminate.
-                            
-                            Respond with ONLY 'yes' if complete, or 'no' otherwise.
-                            """
-                        ),
-                        projectManager.Kernel)
-                    {
-                        ResultParser = (result) => {
-                            var val = result.GetValue<string>();
-                            if (val == null) return false;
-                            var trimmed = val.Trim('"', '\'', ' ', '\n', '\r', '.', ',', ';', ':');
-                            return (trimmed?.Contains("yes", StringComparison.OrdinalIgnoreCase) ?? false) || 
-                                   (trimmed?.Contains("true", StringComparison.OrdinalIgnoreCase) ?? false);
-                        },
-                        MaximumIterations = agentsToRun.Count * 2 + 2, // Sane limit based on team size
-                        HistoryVariableName = "history"
+                        // Ограничитель на случай бесконечного цикла
+                        MaximumIterations = agentsToRun.Count * 3 + 3
                     }
                 };
+                Console.WriteLine($"[AiTeamController] ExecutionSettings configured. Agents count: {agentsToRun.Count}");
+            }
+            else
+            {
+                Console.WriteLine($"[AiTeamController] WARNING: Project Manager not found in selected agents!");
             }
             sessionData.IsConfigured = true;
         }
@@ -368,33 +355,50 @@ public class AiTeamController : ControllerBase
                 if (hasMore)
                 {
                     var message = enumerator!.Current;
-                    
+
+                    Console.WriteLine($"[AiTeamController] SK stream chunk: AuthorName='{message.AuthorName}', Content='{message.Content?.Substring(0, Math.Min(30, message.Content?.Length ?? 0))}', HasContent={!string.IsNullOrEmpty(message.Content)}");
+
+                    // Detect author change - this means previous agent finished their turn
+                    bool authorChanged = !firstChunk && !string.IsNullOrEmpty(message.AuthorName) && message.AuthorName != currentAuthor;
+
+                    if (authorChanged)
+                    {
+                        Console.WriteLine($"[AiTeamController] Author changed from '{currentAuthor}' to '{message.AuthorName}'");
+                    }
+
                     // Only switch author if the new author is non-null and different from current
+                    // AND if we have already received some content from the previous author
                     if (firstChunk || (!string.IsNullOrEmpty(message.AuthorName) && message.AuthorName != currentAuthor))
                     {
-                        if (!firstChunk && !string.IsNullOrEmpty(message.AuthorName))
+                        // Signal completion of previous agent's message BEFORE switching
+                        // Но только если предыдущий агент реально что-то сказал
+                        if (!firstChunk && !string.IsNullOrEmpty(currentAuthor))
                         {
+                            Console.WriteLine($"[AiTeamController] Sending IsComplete=true for '{currentAuthor}'");
                             yield return new StreamingMessageDto { Author = currentAuthor, ContentPiece = "", IsComplete = true, ServerSessionId = serverSessionId };
                         }
-                        
+
                         if (!string.IsNullOrEmpty(message.AuthorName))
                         {
                             currentAuthor = message.AuthorName;
+                            Console.WriteLine($"[AiTeamController] Now processing: '{currentAuthor}'");
                         }
                         else if (firstChunk)
                         {
                             currentAuthor = "Unknown";
                         }
-                        
-                        if (firstChunk || !string.IsNullOrEmpty(message.AuthorName)) 
+
+                        if (firstChunk || !string.IsNullOrEmpty(message.AuthorName))
                         {
                             yield return new StreamingMessageDto { Author = "System", ContentPiece = $"\r\n*[Project Manager gives floor to {currentAuthor}...]*\r\n\r\n", IsComplete = true, ServerSessionId = serverSessionId };
                         }
-                        
+
                         firstChunk = false;
                     }
 
-                    if (!string.IsNullOrEmpty(message.Content))
+                    // Отправляем контент только если это не системное сообщение о смене автора
+                    // и если контент действительно есть
+                    if (!string.IsNullOrEmpty(message.Content) && !message.Content.Trim().All(char.IsWhiteSpace))
                     {
                         yield return new StreamingMessageDto
                         {
