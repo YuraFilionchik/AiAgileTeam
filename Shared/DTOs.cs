@@ -31,3 +31,9 @@ public class StreamingMessageDto
     public bool IsComplete { get; set; }
     public string? ServerSessionId { get; set; }
 }
+
+public class ReportRequest
+{
+    public string Title { get; set; } = "";
+    public List<ChatMessageDto> Messages { get; set; } = new();
+}

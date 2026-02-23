@@ -7,6 +7,9 @@ using Microsoft.SemanticKernel.Agents.Chat;
 using Microsoft.SemanticKernel.ChatCompletion;
 using AiAgileTeam.Models;
 using AiAgileTeam.Services;
+using QuestPDF.Fluent;
+using QuestPDF.Helpers;
+using QuestPDF.Infrastructure;
 
 namespace AiAgileTeam.Api.Controllers;
 
@@ -77,6 +80,46 @@ public class AiTeamController : ControllerBase
                 yield return content;
             }
         }
+    }
+
+    [HttpPost("report")]
+    public IActionResult DownloadReport([FromBody] ReportRequest request)
+    {
+        var document = Document.Create(container =>
+        {
+            container.Page(page =>
+            {
+                page.Size(PageSizes.A4);
+                page.Margin(1, Unit.Inch);
+                page.PageColor(Colors.White);
+                page.DefaultTextStyle(x => x.FontSize(11));
+
+                page.Header().PaddingBottom(10).Text(request.Title).SemiBold().FontSize(20).FontColor(Colors.Blue.Medium);
+
+                page.Content().Column(column =>
+                {
+                    column.Spacing(10);
+
+                    foreach (var message in request.Messages)
+                    {
+                        column.Item().PaddingVertical(5).Column(msgCol =>
+                        {
+                            msgCol.Item().Text(message.Author).Bold().FontSize(10).FontColor(message.IsUser ? Colors.Green.Medium : Colors.Grey.Darken2);
+                            msgCol.Item().Text(message.Content);
+                        });
+                    }
+                });
+
+                page.Footer().AlignCenter().Text(x =>
+                {
+                    x.Span("Page ");
+                    x.CurrentPageNumber();
+                });
+            });
+        });
+
+        byte[] pdfBytes = document.GeneratePdf();
+        return File(pdfBytes, "application/pdf", "AiAgileTeam_Report.pdf");
     }
 
     [HttpPost("message")]
