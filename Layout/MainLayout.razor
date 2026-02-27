@@ -1,22 +1,29 @@
 ﻿@inherits LayoutComponentBase
+@implements IDisposable
+@inject ApiHealthService ApiHealthService
+@using AiAgileTeam.Services
 
 <MudThemeProvider IsDarkMode="true" />
 <MudDialogProvider />
 <MudSnackbarProvider />
 <MudPopoverProvider />
 
-<MudLayout>
+<MudLayout Class="main-layout">
     <MudAppBar Elevation="1">
         <MudIconButton Icon="@Icons.Material.Filled.Menu" Color="Color.Inherit" Edge="Edge.Start" OnClick="@((e) => DrawerToggle())" />
         <MudText Typo="Typo.h5" Class="ml-3">AI Agile Team</MudText>
         <MudSpacer />
+        <div class="api-status-wrapper">
+            <MudIcon Icon="@ApiStatusIcon" Color="@ApiStatusColor" Size="Size.Small" />
+            <MudText Typo="Typo.body2" Class="api-status-text">@ApiStatusText</MudText>
+        </div>
         <MudIconButton Icon="@Icons.Material.Filled.Settings" Color="Color.Inherit" Href="/settings" />
     </MudAppBar>
     <MudDrawer @bind-Open="_drawerOpen" ClipMode="DrawerClipMode.Always" Elevation="2">
         <NavMenu />
     </MudDrawer>
-    <MudMainContent>
-        <MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="pt-4">
+    <MudMainContent Class="main-content-area">
+        <MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="pt-4 main-content-container">
             @Body
         </MudContainer>
     </MudMainContent>
@@ -24,9 +31,69 @@
 
 @code {
     bool _drawerOpen = true;
+    bool _hasInitialHealthCheck;
+    CancellationTokenSource? _healthCheckCancellationTokenSource;
 
     void DrawerToggle()
     {
         _drawerOpen = !_drawerOpen;
+    }
+
+    protected override void OnInitialized()
+    {
+        ApiHealthService.StatusChanged += OnApiHealthStatusChanged;
+        _healthCheckCancellationTokenSource = new CancellationTokenSource();
+        _ = MonitorApiHealthAsync(_healthCheckCancellationTokenSource.Token);
+    }
+
+    private async Task MonitorApiHealthAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await ApiHealthService.CheckAsync(cancellationToken);
+            _hasInitialHealthCheck = true;
+            await InvokeAsync(StateHasChanged);
+
+            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(10));
+            while (await timer.WaitForNextTickAsync(cancellationToken))
+            {
+                await ApiHealthService.CheckAsync(cancellationToken);
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    private void OnApiHealthStatusChanged()
+    {
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private string ApiStatusText => !_hasInitialHealthCheck
+        ? "API: checking..."
+        : ApiHealthService.IsApiAvailable ? "API: online" : "API: offline";
+
+    private string ApiStatusIcon => !_hasInitialHealthCheck
+        ? Icons.Material.Filled.Sync
+        : ApiHealthService.IsApiAvailable ? Icons.Material.Filled.CloudDone : Icons.Material.Filled.CloudOff;
+
+    private Color ApiStatusColor => !_hasInitialHealthCheck
+        ? Color.Warning
+        : ApiHealthService.IsApiAvailable ? Color.Success : Color.Error;
+
+    public void Dispose()
+    {
+        ApiHealthService.StatusChanged -= OnApiHealthStatusChanged;
+
+        if (_healthCheckCancellationTokenSource is null)
+        {
+            return;
+        }
+
+        _healthCheckCancellationTokenSource.Cancel();
+        _healthCheckCancellationTokenSource.Dispose();
+        _healthCheckCancellationTokenSource = null;
     }
 }

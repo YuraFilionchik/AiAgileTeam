@@ -114,6 +114,42 @@ public class AiTeamController : ControllerBase
     {
         QuestPDF.Settings.License = QuestPDF.Infrastructure.LicenseType.Community;
 
+        // Server-side safety: strip system/floor-change messages and [DONE] markers
+        var cleanMessages = request.Messages
+            .Where(m => m.Author != "System"
+                        && !string.IsNullOrWhiteSpace(m.Content)
+                        && !m.Content.TrimStart().StartsWith("*[Project Manager gives floor", StringComparison.Ordinal))
+            .Select(m => new ChatMessageDto
+            {
+                Author = m.Author,
+                IsUser = m.IsUser,
+                Content = m.Content
+                    .Replace("[DONE]", "", StringComparison.OrdinalIgnoreCase)
+                    .TrimEnd()
+            })
+            .Where(m => !string.IsNullOrWhiteSpace(m.Content))
+            .ToList();
+
+        var deduplicatedMessages = new List<ChatMessageDto>(cleanMessages.Count);
+        string? previousAuthor = null;
+        string? previousContent = null;
+
+        foreach (var message in cleanMessages)
+        {
+            var normalizedContent = message.Content.Trim();
+            var isDuplicate = string.Equals(previousAuthor, message.Author, StringComparison.Ordinal)
+                              && string.Equals(previousContent, normalizedContent, StringComparison.Ordinal);
+
+            if (isDuplicate)
+            {
+                continue;
+            }
+
+            deduplicatedMessages.Add(message);
+            previousAuthor = message.Author;
+            previousContent = normalizedContent;
+        }
+
         var document = Document.Create(container =>
         {
             container.Page(page =>
@@ -123,27 +159,52 @@ public class AiTeamController : ControllerBase
                 page.PageColor(Colors.White);
                 page.DefaultTextStyle(x => x.FontSize(11));
 
-                page.Header().PaddingBottom(10).Text(request.Title).SemiBold().FontSize(20).FontColor(Colors.Blue.Medium);
+                page.Header().PaddingBottom(10).Column(header =>
+                {
+                    header.Item().Text(request.Title).SemiBold().FontSize(20).FontColor(Colors.Blue.Medium);
+                    header.Item().PaddingTop(2).Text($"Generated: {DateTime.UtcNow:yyyy-MM-dd HH:mm} UTC").FontSize(8).FontColor(Colors.Grey.Medium);
+                });
 
                 page.Content().Column(column =>
                 {
-                    column.Spacing(10);
+                    column.Spacing(12);
 
-                    foreach (var message in request.Messages)
+                    foreach (var message in deduplicatedMessages)
                     {
-                        column.Item().PaddingVertical(5).Column(msgCol =>
+                        if (message.IsUser)
                         {
-                            msgCol.Item()
-                                .PaddingBottom(2)
-                                .Text(message.Author)
-                                .Bold()
-                                .FontSize(10)
-                                .FontColor(message.IsUser ? Colors.Green.Medium : Colors.Grey.Darken2);
+                            // Render user request as a highlighted brief section
+                            column.Item()
+                                .Background(Colors.Blue.Lighten5)
+                                .Padding(10)
+                                .Column(section =>
+                                {
+                                    section.Item()
+                                        .PaddingBottom(4)
+                                        .Text("Project Request")
+                                        .Bold()
+                                        .FontSize(12)
+                                        .FontColor(Colors.Blue.Darken2);
 
-                            msgCol.Item()
-                                .PaddingLeft(4)
-                                .Element(c => _markdownService.RenderMarkdown(c, message.Content));
-                        });
+                                    section.Item()
+                                        .Element(c => _markdownService.RenderMarkdown(c, message.Content));
+                                });
+                        }
+                        else
+                        {
+                            // Render PM synthesis as the main document body
+                            column.Item().Column(section =>
+                            {
+                                section.Item()
+                                    .PaddingBottom(4)
+                                    .Text($"Prepared by: {message.Author}")
+                                    .FontSize(9)
+                                    .FontColor(Colors.Grey.Darken1);
+
+                                section.Item()
+                                    .Element(c => _markdownService.RenderMarkdown(c, message.Content));
+                            });
+                        }
                     }
                 });
 
@@ -292,29 +353,32 @@ public class AiTeamController : ControllerBase
                 var agent = _teamService.CreateAgent(agentConfig, settings);
                 skAgents.Add(agent);
                 groupChat.AddAgent(agent);
-                // Find Project Manager by role, not by name
                 if (agentConfig.Role == "Project Manager") { projectManager = agent; }
             }
 
             if (projectManager != null)
             {
-                // Создаём новую стратегию для каждой сессии (сброс состояния)
-                var selectionStrategy = new ResilientWorkflowSelectionStrategy();
-                
-                // Используем детерминированные стратегии вместо LLM-based для экономии токенов
+                // Resolve PM's LLM for orchestration decisions and context compression
+                var pmConfig = agentsToRun.First(a => a.Role == "Project Manager");
+                ApiConfig pmApiConfig = settings.ApiKeyMode == "global"
+                    ? settings.GlobalApi
+                    : pmConfig.ApiSettings ?? settings.GlobalApi;
+                var pmLlm = _teamService.CreateChatService(pmApiConfig, pmConfig.ModelSettings.Model);
+
+                sessionData.PmLlm = pmLlm;
+                sessionData.Compressor = new ChatContextCompressor(pmLlm, tailSize: 4);
+
+                var selectionStrategy = new PmOrchestratorSelectionStrategy(pmLlm, sessionData.Compressor);
+
                 groupChat.ExecutionSettings = new()
                 {
-                    // 1. Гибкая стратегия выбора с поддержкой прерываний и @упоминаний
                     SelectionStrategy = selectionStrategy,
-
-                    // 2. Используем проверку на [DONE] только в последнем сообщении
-                    TerminationStrategy = new TokenSavingTerminationStrategy()
+                    TerminationStrategy = new SafeTerminationStrategy()
                     {
-                        // Ограничитель на случай бесконечного цикла
                         MaximumIterations = agentsToRun.Count * 3 + 3
                     }
                 };
-                Console.WriteLine($"[AiTeamController] ExecutionSettings configured. Agents count: {agentsToRun.Count}");
+                Console.WriteLine($"[AiTeamController] PM-driven orchestration configured. Agents count: {agentsToRun.Count}");
             }
             else
             {

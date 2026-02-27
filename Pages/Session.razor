@@ -21,59 +21,81 @@
                 <div class="d-flex flex-column gap-1">
                     @foreach (var agent in _settings.Agents)
                     {
-                        <MudSwitch Value="agent.IsSelected" ValueChanged="@((bool val) => ToggleAgentAsync(agent, val))" Disabled="@agent.IsMandatory" Color="Color.Primary" Label="@agent.DisplayName" T="bool" />
+                        <div class="agent-toggle-item @(IsActiveAgent(agent) ? "agent-toggle-item--active" : string.Empty)">
+                            <MudSwitch Value="agent.IsSelected" ValueChanged="@((bool val) => ToggleAgentAsync(agent, val))" Disabled="@agent.IsMandatory" Color="Color.Primary" Label="@GetAgentToggleLabel(agent)" T="bool" />
+                        </div>
                     }
                 </div>
             }
         </MudPaper>
     </MudItem>
-    <MudItem xs="12" sm="8" md="9" Class="d-flex flex-column" Style="height: 100%;">
-        <MudText Typo="Typo.h5" GutterBottom="true">Session</MudText>
+    <MudItem xs="12" sm="8" md="9">
+        <div class="session-content-row">
+            <div class="session-chat-area">
+                <MudText Typo="Typo.h5" GutterBottom="true">Session</MudText>
 
-        @if (_isInitializing)
-        {
-            <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
-        }
-        else
-        {
-            <ChatLog Messages="_messages" />
+                @if (_isInitializing)
+                {
+                    <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+                }
+                else
+                {
+                    <ChatLog Messages="_messages" />
 
-            @if (!_isSessionComplete)
-            {
-                <MudCard Class="mt-4">
-                    <MudCardContent>
-                        <MudTextField @bind-Value="_userInput" Label="Reply..." Lines="3" />
-                        <div class="d-flex align-center mt-2 gap-2">
-                            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SendMessage" Disabled="_isProcessing">
-                                Send
-                            </MudButton>
-                            @if (_isProcessing)
-                            {
-                                <MudButton Variant="Variant.Filled" Color="Color.Error" OnClick="StopProcessing">
-                                    Stop
-                                </MudButton>
-                            }
-                        </div>
-                    </MudCardContent>
-                </MudCard>
-            }
-            else
-            {
-                <MudCard Class="mt-4" Style="border: 2px solid var(--mud-palette-success);">
-                    <MudCardContent>
-                        <div class="d-flex align-center justify-space-between">
-                            <div>
-                                <MudText Typo="Typo.h6">Session Complete</MudText>
-                                <MudText Typo="Typo.body2">The virtual team has finished their work. You can download the full report below.</MudText>
-                            </div>
-                            <MudButton Variant="Variant.Filled" Color="Color.Secondary" OnClick="DownloadReportAsync" StartIcon="@Icons.Material.Filled.Download" Size="Size.Large">
-                                Download Report (.pdf)
-                            </MudButton>
-                        </div>
-                    </MudCardContent>
-                </MudCard>
-            }
-        }
+                    @if (!_isSessionComplete)
+                    {
+                        <MudCard Class="mt-4">
+                            <MudCardContent>
+                                <MudTextField @bind-Value="_userInput" Label="Reply..." Lines="3" />
+                                <div class="d-flex align-center mt-2 gap-2">
+                                    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SendMessage" Disabled="_isProcessing">
+                                        Send
+                                    </MudButton>
+                                    @if (_isProcessing)
+                                    {
+                                        <MudButton Variant="Variant.Filled" Color="Color.Error" OnClick="StopProcessing">
+                                            Stop
+                                        </MudButton>
+                                    }
+                                </div>
+                            </MudCardContent>
+                        </MudCard>
+                    }
+                    else
+                    {
+                        <MudCard Class="mt-4" Style="border: 2px solid var(--mud-palette-success);">
+                            <MudCardContent>
+                                <div class="d-flex align-center justify-space-between">
+                                    <div>
+                                        <MudText Typo="Typo.h6">Session Complete</MudText>
+                                        <MudText Typo="Typo.body2">The virtual team has finished their work. You can download the full report below.</MudText>
+                                        @if (!string.IsNullOrWhiteSpace(_reportStatusMessage))
+                                        {
+                                            <MudText Typo="Typo.body2" Class="mt-2">@_reportStatusMessage</MudText>
+                                        }
+                                    </div>
+                                    <MudButton Variant="Variant.Filled"
+                                               Color="Color.Secondary"
+                                               OnClick="DownloadReportAsync"
+                                               StartIcon="@Icons.Material.Filled.Download"
+                                               Size="Size.Large"
+                                               Disabled="@_isGeneratingReport">
+                                        @(_isGeneratingReport ? "Generating report..." : "Download Report (.pdf)")
+                                    </MudButton>
+                                </div>
+                                @if (_isGeneratingReport)
+                                {
+                                    <MudProgressLinear Class="mt-3" Color="Color.Secondary" Indeterminate="true" />
+                                }
+                            </MudCardContent>
+                        </MudCard>
+                    }
+                }
+            </div>
+            <div class="session-summary-wrapper">
+                <SessionSummaryPanel Phases="_phases" />
+            </div>
+        </div>
     </MudItem>
 </MudGrid>
 
@@ -94,20 +116,62 @@
     private bool _isInitializing = true;
     private bool _isProcessing = false;
     private bool _isSessionComplete = false;
+    private bool _isGeneratingReport = false;
     private bool _clarificationPhase = false;
     private int _clarificationQuestionsAsked = 0;
     private CancellationTokenSource? _cts;
     private string? _serverSessionId;
+    private string? _reportStatusMessage;
+    private bool _startNewServerSessionOnNextMessage;
+    private string? _activeAgentName;
+    private readonly List<SessionPhase> _phases = [];
 
     private async Task ToggleAgentAsync(AgentConfig agent, bool val)
     {
         agent.IsSelected = val;
         await SettingsService.SaveSettingsAsync(_settings);
+
+        // Existing server session is configured only once.
+        // Mark next user request to start a fresh server session with full history,
+        // without interrupting current streaming output.
+        _startNewServerSessionOnNextMessage = true;
+
+        _messages.Add(new ChatMessage
+        {
+            Author = "System",
+            Content = $"Team composition updated: {(val ? "enabled" : "disabled")} '{GetAgentToggleLabel(agent)}'. Changes will apply from the next turn.",
+            IsUser = false
+        });
+
         if (_currentSession != null)
         {
             _currentSession.SettingsSnapshot = _settings;
             await SaveCurrentSessionAsync();
         }
+
+        StateHasChanged();
+    }
+
+    private static string GetAgentToggleLabel(AgentConfig agent)
+    {
+        if (string.IsNullOrWhiteSpace(agent.Role))
+            return agent.DisplayName;
+
+        if (string.IsNullOrWhiteSpace(agent.DisplayName))
+            return agent.Role;
+
+        return $"{agent.Role} — {agent.DisplayName}";
+    }
+
+    private bool IsActiveAgent(AgentConfig agent)
+    {
+        if (string.IsNullOrWhiteSpace(_activeAgentName))
+        {
+            return false;
+        }
+
+        return string.Equals(agent.DisplayName, _activeAgentName, StringComparison.OrdinalIgnoreCase)
+               || string.Equals(agent.Role, _activeAgentName, StringComparison.OrdinalIgnoreCase);
     }
 
     private void StopProcessing()
@@ -194,6 +258,11 @@
                 {
                     Console.WriteLine($"[Session.razor] Agent '{message.Author}' completed their turn");
                     lastMessageWasComplete = true;
+                    CompleteAgentPhase(message.Author);
+                    if (string.Equals(_activeAgentName, message.Author, StringComparison.OrdinalIgnoreCase))
+                    {
+                        _activeAgentName = null;
+                    }
                     await SaveCurrentSessionAsync();
 
                     // Check for [DONE] in the last message from this agent
@@ -202,6 +271,9 @@
                     {
                         Console.WriteLine($"[Session.razor] [DONE] detected in last message from '{message.Author}'");
                         _isSessionComplete = true;
+                        CompleteAllPhases();
+                        AddPhase("Сессия завершена", "Итоговый отчёт готов");
+                        MarkPhaseCompleted(_phases.Count - 1);
                         StateHasChanged();
                         return; // Stop processing - session is complete
                     }
@@ -209,6 +281,8 @@
                     if (_clarificationPhase && (lastMessage?.Content.Contains("[READY]") == true || _clarificationQuestionsAsked >= 2))
                     {
                         _clarificationPhase = false;
+                        CompleteCurrentPhase();
+                        SetPhaseInProgress();
                         _messages.Add(new ChatMessage { Author = "System", Content = "Clarification complete. Starting team discussion...", IsUser = false });
                         await SaveCurrentSessionAsync();
                         StateHasChanged();
@@ -233,21 +307,30 @@
                     uiMessage = new ChatMessage { Author = currentAuthor, Content = "", IsUser = false };
                     _messages.Add(uiMessage);
                     lastMessageWasComplete = false;
+
+                    if (!string.IsNullOrWhiteSpace(currentAuthor) && currentAuthor != "System")
+                    {
+                        _activeAgentName = currentAuthor;
+                        EnsureAgentPhase(currentAuthor);
+                    }
+
                     Console.WriteLine($"[Session.razor] Switched to author '{currentAuthor}'");
                 }
 
-                if (!string.IsNullOrEmpty(message.ContentPiece))
+                if (!string.IsNullOrEmpty(message.ContentPiece) && AppendStreamingContent(uiMessage, message.ContentPiece))
                 {
-                    uiMessage.Content += message.ContentPiece;
                     StateHasChanged();
                 }
             }
         }
         catch (OperationCanceledException)
         {
+            _activeAgentName = null;
             _messages.Add(new ChatMessage { Author = "System", Content = "[Stopped by user]", IsUser = false });
             StateHasChanged();
         }
+
+        _activeAgentName = null;
 
         if (_clarificationPhase)
         {
@@ -255,6 +338,50 @@
         }
         
         Console.WriteLine($"[Session.razor] Stream processing complete. Total messages: {messageCount}");
+    }
+
+    private static bool AppendStreamingContent(ChatMessage targetMessage, string incomingPiece)
+    {
+        if (string.IsNullOrEmpty(incomingPiece))
+        {
+            return false;
+        }
+
+        var existing = targetMessage.Content ?? string.Empty;
+        if (string.IsNullOrEmpty(existing))
+        {
+            targetMessage.Content = incomingPiece;
+            return true;
+        }
+
+        if (string.Equals(existing, incomingPiece, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (incomingPiece.StartsWith(existing, StringComparison.Ordinal))
+        {
+            targetMessage.Content += incomingPiece[existing.Length..];
+            return true;
+        }
+
+        if (existing.EndsWith(incomingPiece, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var maxOverlap = Math.Min(existing.Length, incomingPiece.Length);
+        for (var overlap = maxOverlap; overlap > 0; overlap--)
+        {
+            if (existing.EndsWith(incomingPiece[..overlap], StringComparison.Ordinal))
+            {
+                targetMessage.Content += incomingPiece[overlap..];
+                return true;
+            }
+        }
+
+        targetMessage.Content += incomingPiece;
+        return true;
     }
 
     private async Task InitializeSessionAsync()
@@ -265,6 +392,14 @@
             _messages.Add(new ChatMessage { Author = "User", Content = Query, IsUser = true });
             _isInitializing = false;
             await SaveCurrentSessionAsync();
+
+            AddPhase("Запрос отправлен", Query.Length > 60 ? Query[..60] + "…" : Query);
+            if (Clarify)
+            {
+                AddPhase("Уточнение требований");
+            }
+            AddPhase(Clarify ? "Командная дискуссия" : "Обработка запроса");
+            SetPhaseInProgress();
             StateHasChanged();
             
             _cts?.Dispose();
@@ -315,7 +450,8 @@
 
     private async Task StartTeamDiscussionAsync()
     {
-         var history = string.IsNullOrEmpty(_serverSessionId) 
+         var mustStartNewSession = _startNewServerSessionOnNextMessage || string.IsNullOrEmpty(_serverSessionId);
+         var history = mustStartNewSession
              ? _messages.Select(m => new ChatMessageDto { Author = m.Author, Content = m.Content, IsUser = m.IsUser }).ToList()
              : new List<ChatMessageDto>();
              
@@ -325,8 +461,10 @@
              Clarify = false,
              Settings = _settings,
              History = history,
-             ServerSessionId = _serverSessionId
+             ServerSessionId = mustStartNewSession ? null : _serverSessionId
          };
+
+         _startNewServerSessionOnNextMessage = false;
          
          _cts?.Dispose();
          _cts = new CancellationTokenSource();
@@ -350,7 +488,8 @@
         _userInput = "";
         _isProcessing = true;
         
-        var historyBeforeCurrent = string.IsNullOrEmpty(_serverSessionId) 
+        var mustStartNewSession = _startNewServerSessionOnNextMessage || string.IsNullOrEmpty(_serverSessionId);
+        var historyBeforeCurrent = mustStartNewSession
             ? _messages.Select(m => new ChatMessageDto { Author = m.Author, Content = m.Content, IsUser = m.IsUser }).ToList()
             : new List<ChatMessageDto>();
         
@@ -368,8 +507,10 @@
                 Query = message,
                 Settings = _settings,
                 History = historyBeforeCurrent,
-                ServerSessionId = _serverSessionId
+                ServerSessionId = mustStartNewSession ? null : _serverSessionId
             };
+
+            _startNewServerSessionOnNextMessage = false;
 
             using var httpClient = HttpClientFactory.CreateClient("ApiClient");
             var httpRequest = new HttpRequestMessage(HttpMethod.Post, $"api/aiteam/message?isClarificationPhase={_clarificationPhase}")
@@ -403,32 +544,234 @@
 
     private async Task DownloadReportAsync()
     {
+        if (_isGeneratingReport)
+        {
+            return;
+        }
+
         try
         {
+            _isGeneratingReport = true;
+            _reportStatusMessage = "Preparing report payload...";
+            StateHasChanged();
+
+            // Extract only the PM's final synthesis and the original user query
+            var reportMessages = ExtractReportMessages();
+
             var request = new ReportRequest
             {
                 Title = _currentSession?.Title ?? "Ai Team Session",
-                Messages = _messages.Select(m => new ChatMessageDto
-                {
-                    Author = m.Author,
-                    Content = m.Content,
-                    IsUser = m.IsUser
-                }).ToList()
+                Messages = reportMessages
             };
 
             using var httpClient = HttpClientFactory.CreateClient("ApiClient");
+            _reportStatusMessage = "Generating PDF on server...";
+            StateHasChanged();
+
             var response = await httpClient.PostAsJsonAsync("api/aiteam/report", request);
             response.EnsureSuccessStatusCode();
+
+            _reportStatusMessage = "Downloading PDF...";
+            StateHasChanged();
 
             var fileStream = await response.Content.ReadAsStreamAsync();
             using var streamRef = new DotNetStreamReference(stream: fileStream);
 
             var fileName = $"Report_{request.Title.Replace(" ", "_")}.pdf";
             await JSRuntime.InvokeVoidAsync("downloadFileFromStream", fileName, streamRef);
+
+            _reportStatusMessage = "Report generated successfully.";
         }
         catch (Exception ex)
         {
+             _reportStatusMessage = "Report generation failed.";
              _messages.Add(new ChatMessage { Author = "System", Content = $"Error downloading report: {ex.Message}", IsUser = false });
+        }
+        finally
+        {
+            _isGeneratingReport = false;
+            StateHasChanged();
+        }
+    }
+
+    /// <summary>
+    /// Extracts only the meaningful content for the PDF report:
+    /// the original user request and the PM's final synthesis (the message containing [DONE]).
+    /// </summary>
+    private List<ChatMessageDto> ExtractReportMessages()
+    {
+        var result = new List<ChatMessageDto>();
+
+        // Include the first user message as project context
+        var userQuery = _messages.FirstOrDefault(m => m.IsUser);
+        if (userQuery is not null)
+        {
+            result.Add(new ChatMessageDto
+            {
+                Author = "Project Request",
+                Content = userQuery.Content,
+                IsUser = true
+            });
+        }
+
+        // Find the PM's final synthesis — the last message containing [DONE]
+        var pmSynthesis = _messages
+            .LastOrDefault(m => !m.IsUser
+                && m.Author != "System"
+                && m.Content.Contains("[DONE]", StringComparison.OrdinalIgnoreCase));
+
+        if (pmSynthesis is not null)
+        {
+            // Strip the [DONE] marker and any surrounding whitespace
+            string cleanContent = NormalizeReportContent(pmSynthesis.Content
+                .Replace("[DONE]", "", StringComparison.OrdinalIgnoreCase));
+
+            result.Add(new ChatMessageDto
+            {
+                Author = pmSynthesis.Author,
+                Content = cleanContent,
+                IsUser = false
+            });
+        }
+        else
+        {
+            // Fallback: if no [DONE] message found, include the last non-system agent message
+            var lastAgentMessage = _messages
+                .LastOrDefault(m => !m.IsUser && m.Author != "System");
+
+            if (lastAgentMessage is not null)
+            {
+                result.Add(new ChatMessageDto
+                {
+                    Author = lastAgentMessage.Author,
+                    Content = lastAgentMessage.Content,
+                    IsUser = false
+                });
+            }
+        }
+
+        return result;
+    }
+
+    private static string NormalizeReportContent(string content)
+    {
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            return string.Empty;
+        }
+
+        var normalized = content.Replace("\r\n", "\n").Trim();
+        var paragraphs = normalized.Split("\n\n", StringSplitOptions.None);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var uniqueParagraphs = new List<string>(paragraphs.Length);
+
+        foreach (var paragraph in paragraphs)
+        {
+            var trimmedParagraph = paragraph.Trim();
+            if (string.IsNullOrWhiteSpace(trimmedParagraph))
+            {
+                continue;
+            }
+
+            if (seen.Add(trimmedParagraph))
+            {
+                uniqueParagraphs.Add(trimmedParagraph);
+            }
+        }
+
+        return string.Join("\n\n", uniqueParagraphs);
+    }
+
+    private void AddPhase(string title, string? description = null)
+    {
+        _phases.Add(new SessionPhase { Title = title, Description = description });
+    }
+
+    private void SetPhaseInProgress()
+    {
+        var next = _phases.FirstOrDefault(p => p.Status == SessionPhaseStatus.Pending);
+        if (next is not null)
+        {
+            next.Status = SessionPhaseStatus.InProgress;
+        }
+    }
+
+    private void CompleteCurrentPhase()
+    {
+        var current = _phases.LastOrDefault(p => p.Status == SessionPhaseStatus.InProgress);
+        if (current is not null)
+        {
+            current.Status = SessionPhaseStatus.Completed;
+        }
+    }
+
+    private void MarkPhaseCompleted(int index)
+    {
+        if (index >= 0 && index < _phases.Count)
+        {
+            _phases[index].Status = SessionPhaseStatus.Completed;
+        }
+    }
+
+    private void EnsureAgentPhase(string agentName)
+    {
+        var label = ResolveAgentLabel(agentName);
+        var existing = _phases.FirstOrDefault(p =>
+            p.Status != SessionPhaseStatus.Completed
+            && p.Title.Contains(label, StringComparison.OrdinalIgnoreCase));
+
+        if (existing is not null)
+        {
+            existing.Status = SessionPhaseStatus.InProgress;
+            return;
+        }
+
+        // Complete generic "processing" phase on first agent turn
+        var processingPhase = _phases.LastOrDefault(p => p.Status == SessionPhaseStatus.InProgress);
+        if (processingPhase is not null
+            && !_phases.Any(p => p.Title.StartsWith("\U0001F5E3", StringComparison.Ordinal) && p.Status == SessionPhaseStatus.Completed))
+        {
+            processingPhase.Status = SessionPhaseStatus.Completed;
+        }
+
+        _phases.Add(new SessionPhase { Title = $"\U0001F5E3 {label}", Status = SessionPhaseStatus.InProgress });
+    }
+
+    private void CompleteAgentPhase(string agentName)
+    {
+        var label = ResolveAgentLabel(agentName);
+        var phase = _phases.LastOrDefault(p =>
+            p.Status == SessionPhaseStatus.InProgress
+            && p.Title.Contains(label, StringComparison.OrdinalIgnoreCase));
+
+        if (phase is not null)
+        {
+            phase.Status = SessionPhaseStatus.Completed;
+        }
+    }
+
+    private string ResolveAgentLabel(string authorName)
+    {
+        if (_settings?.Agents is null)
+        {
+            return authorName;
+        }
+
+        var agent = _settings.Agents.FirstOrDefault(a =>
+            string.Equals(a.DisplayName, authorName, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(a.Role, authorName, StringComparison.OrdinalIgnoreCase));
+
+        return agent is not null ? GetAgentToggleLabel(agent) : authorName;
+    }
+
+    private void CompleteAllPhases()
+    {
+        foreach (var phase in _phases)
+        {
+            if (phase.Status != SessionPhaseStatus.Completed)
+            {
+                phase.Status = SessionPhaseStatus.Completed;
+            }
         }
     }
 }

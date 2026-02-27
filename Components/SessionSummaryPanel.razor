@@ -1,0 +1,69 @@
+@using AiAgileTeam.Models
+
+<MudPaper Elevation="1" Class="pa-3 summary-panel">
+    <MudText Typo="Typo.subtitle1" Class="mb-2" Style="font-weight: 600;">
+        <MudIcon Icon="@Icons.Material.Filled.Summarize" Size="Size.Small" Class="mr-1" Style="vertical-align: middle;" />
+        Ход сессии
+    </MudText>
+
+    @if (Phases is { Count: > 0 })
+    {
+        <MudTimeline TimelinePosition="TimelinePosition.Start" Class="summary-timeline">
+            @foreach (var phase in Phases)
+            {
+                <MudTimelineItem Color="@GetPhaseColor(phase.Status)"
+                                 Size="Size.Small"
+                                 Variant="@GetPhaseVariant(phase.Status)">
+                    <ItemContent>
+                        <div class="d-flex flex-column">
+                            <MudText Typo="Typo.body2" Style="@GetPhaseTitleStyle(phase.Status)">
+                                @phase.Title
+                            </MudText>
+                            @if (!string.IsNullOrWhiteSpace(phase.Description))
+                            {
+                                <MudText Typo="Typo.caption" Style="opacity: 0.7;">
+                                    @phase.Description
+                                </MudText>
+                            }
+                            @if (phase.Status == SessionPhaseStatus.InProgress)
+                            {
+                                <MudProgressLinear Color="Color.Primary" Indeterminate="true"
+                                                   Size="Size.Small" Class="mt-1" Style="max-width: 120px;" />
+                            }
+                        </div>
+                    </ItemContent>
+                </MudTimelineItem>
+            }
+        </MudTimeline>
+    }
+    else
+    {
+        <MudText Typo="Typo.caption" Style="opacity: 0.5;">Ожидание начала...</MudText>
+    }
+</MudPaper>
+
+@code {
+    [Parameter]
+    public List<SessionPhase> Phases { get; set; } = [];
+
+    private static Color GetPhaseColor(SessionPhaseStatus status) => status switch
+    {
+        SessionPhaseStatus.Completed => Color.Success,
+        SessionPhaseStatus.InProgress => Color.Primary,
+        _ => Color.Default
+    };
+
+    private static Variant GetPhaseVariant(SessionPhaseStatus status) => status switch
+    {
+        SessionPhaseStatus.Completed => Variant.Filled,
+        SessionPhaseStatus.InProgress => Variant.Filled,
+        _ => Variant.Outlined
+    };
+
+    private static string GetPhaseTitleStyle(SessionPhaseStatus status) => status switch
+    {
+        SessionPhaseStatus.InProgress => "font-weight: 600;",
+        SessionPhaseStatus.Completed => "opacity: 0.7; text-decoration: line-through;",
+        _ => "opacity: 0.5;"
+    };
+}

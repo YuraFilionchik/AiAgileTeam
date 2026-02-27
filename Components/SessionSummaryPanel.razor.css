@@ -1,0 +1,12 @@
+.summary-panel {
+    height: 100%;
+    overflow-y: auto;
+}
+
+::deep .summary-timeline {
+    padding: 0;
+}
+
+::deep .summary-timeline .mud-timeline-item {
+    padding-block: 2px;
+}

@@ -4,6 +4,30 @@
     flex-direction: column;
 }
 
+.api-status-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    margin-right: 0.75rem;
+}
+
+.api-status-text {
+    margin: 0;
+}
+
+.main-layout {
+    min-height: 100vh;
+}
+
+.main-layout ::deep .mud-main-content {
+    display: flex;
+    flex-direction: column;
+}
+
+.main-content-container {
+    flex: 1 1 auto;
+}
+
 main {
     flex: 1;
 }

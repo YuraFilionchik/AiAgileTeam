@@ -80,7 +80,7 @@ else
         }
     }
 
-    private void StartSession()
+    private async Task StartSession()
     {
         // Simple validation of settings before starting session
         bool keyMissing = false;
@@ -103,6 +103,8 @@ else
             NavigationManager.NavigateTo("/settings");
             return;
         }
+
+        await SettingsService.SaveSettingsAsync(_settings);
 
         var uri = NavigationManager.GetUriWithQueryParameters("/session", new Dictionary<string, object?> {
             { "query", _query },

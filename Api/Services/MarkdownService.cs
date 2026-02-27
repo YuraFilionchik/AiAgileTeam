@@ -76,62 +76,11 @@ public class MarkdownService
 
     private void RenderParagraph(IContainer container, ParagraphBlock paragraph)
     {
-        var inlineText = BuildInlineText(paragraph.Inline);
-        container.Text(inlineText);
-    }
-
-    private string BuildInlineText(Inline? inline)
-    {
-        if (inline == null) return "";
-
-        var result = new System.Text.StringBuilder();
-        var current = inline;
-
-        while (current != null)
-        {
-            switch (current)
-            {
-                case LiteralInline literal:
-                    result.Append(literal.Content.Text);
-                    break;
-
-                case EmphasisInline emphasis:
-                    var content = BuildInlineText(emphasis.FirstChild);
-                    result.Append($"*{content}*");
-                    break;
-
-                case CodeInline code:
-                    result.Append($"`{code.Content}`");
-                    break;
-
-                case LinkInline link:
-                    var linkText = BuildInlineText(link.FirstChild);
-                    result.Append(link.Url != null ? $"{linkText} ({link.Url})" : linkText);
-                    break;
-
-                case LineBreakInline:
-                    result.Append("\n");
-                    break;
-
-                case ContainerInline containerInline:
-                    var child = containerInline.FirstChild;
-                    while (child != null)
-                    {
-                        result.Append(BuildInlineText(child));
-                        child = child.NextSibling;
-                    }
-                    break;
-            }
-
-            current = current.NextSibling;
-        }
-
-        return result.ToString();
+        container.Text(text => RenderInline(text, paragraph.Inline));
     }
 
     private void RenderHeading(IContainer container, HeadingBlock heading)
     {
-        var inlineText = BuildInlineText(heading.Inline);
         var fontSize = heading.Level switch
         {
             1 => 24,
@@ -141,11 +90,7 @@ public class MarkdownService
             _ => 12
         };
 
-        container
-            .Text(inlineText)
-            .Bold()
-            .FontSize(fontSize)
-            .FontColor(Colors.Blue.Medium);
+        container.Text(text => RenderInline(text, heading.Inline, fontSize, Colors.Blue.Medium, isBold: true));
     }
 
     private void RenderList(IContainer container, ListBlock list)
@@ -173,8 +118,7 @@ public class MarkdownService
                             {
                                 if (child is ParagraphBlock p)
                                 {
-                                    var inlineText = BuildInlineText(p.Inline);
-                                    itemCol.Item().Text(inlineText);
+                                    itemCol.Item().Element(c => RenderParagraph(c, p));
                                 }
                                 else if (child is ListBlock nestedList)
                                 {
@@ -186,6 +130,100 @@ public class MarkdownService
                 }
             }
         });
+    }
+
+    private static void RenderInline(
+        TextDescriptor text,
+        Inline? inline,
+        float? fontSize = null,
+        string? fontColor = null,
+        bool isBold = false,
+        bool isItalic = false,
+        bool isMonospace = false,
+        bool isUnderline = false)
+    {
+        var current = inline;
+        while (current != null)
+        {
+            switch (current)
+            {
+                case LiteralInline literal:
+                    var spanText = literal.Content.ToString();
+                    if (!string.IsNullOrEmpty(spanText))
+                    {
+                        ApplyStyle(text.Span(spanText), fontSize, fontColor, isBold, isItalic, isMonospace, isUnderline);
+                    }
+                    break;
+
+                case EmphasisInline emphasis:
+                    var emphasisBold = isBold || emphasis.DelimiterCount >= 2;
+                    var emphasisItalic = isItalic || emphasis.DelimiterCount == 1;
+                    RenderInline(text, emphasis.FirstChild, fontSize, fontColor, emphasisBold, emphasisItalic, isMonospace, isUnderline);
+                    break;
+
+                case CodeInline code:
+                    ApplyStyle(text.Span(code.Content), fontSize, fontColor, isBold, isItalic, isMonospace: true, isUnderline);
+                    break;
+
+                case LinkInline link:
+                    RenderInline(text, link.FirstChild, fontSize, Colors.Blue.Medium, isBold, isItalic, isMonospace, isUnderline: true);
+                    if (!string.IsNullOrWhiteSpace(link.Url))
+                    {
+                        ApplyStyle(text.Span($" ({link.Url})"), fontSize, Colors.Blue.Medium, false, false, false, false);
+                    }
+                    break;
+
+                case LineBreakInline:
+                    text.Span("\n");
+                    break;
+
+                case ContainerInline containerInline:
+                    RenderInline(text, containerInline.FirstChild, fontSize, fontColor, isBold, isItalic, isMonospace, isUnderline);
+                    break;
+            }
+
+            current = current.NextSibling;
+        }
+    }
+
+    private static void ApplyStyle(
+        TextSpanDescriptor span,
+        float? fontSize,
+        string? fontColor,
+        bool isBold,
+        bool isItalic,
+        bool isMonospace,
+        bool isUnderline)
+    {
+        if (fontSize.HasValue)
+        {
+            span.FontSize(fontSize.Value);
+        }
+
+        if (!string.IsNullOrWhiteSpace(fontColor))
+        {
+            span.FontColor(fontColor);
+        }
+
+        if (isBold)
+        {
+            span.Bold();
+        }
+
+        if (isItalic)
+        {
+            span.Italic();
+        }
+
+        if (isMonospace)
+        {
+            span.FontFamily("Courier New");
+        }
+
+        if (isUnderline)
+        {
+            span.Underline();
+        }
     }
 
     private void RenderCodeBlock(IContainer container, CodeBlock codeBlock)

@@ -36,4 +36,5 @@ builder.Services.AddMudServices();
 builder.Services.AddBlazoredLocalStorage();
 builder.Services.AddScoped<SettingsService>();
 builder.Services.AddScoped<ChatSessionService>();
+builder.Services.AddScoped<ApiHealthService>();
 await builder.Build().RunAsync();
