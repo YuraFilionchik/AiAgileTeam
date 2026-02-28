@@ -29,6 +29,15 @@ public class AiTeamController : ControllerBase
     }
 
     /// <summary>
+    /// Returns API health status.
+    /// </summary>
+    [HttpGet("health")]
+    public IActionResult GetHealth()
+    {
+        return Ok(new { status = "ok" });
+    }
+
+    /// <summary>
     /// Gets API config and model for clarification agent based on settings
     /// </summary>
     private (ApiConfig apiConfig, string model) GetClarificationConfig(AppSettings settings)

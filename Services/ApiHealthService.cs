@@ -27,10 +27,10 @@ public sealed class ApiHealthService
         try
         {
             using var httpClient = _httpClientFactory.CreateClient("ApiClient");
-            using var request = new HttpRequestMessage(HttpMethod.Get, "api/aiteam/session");
+            using var request = new HttpRequestMessage(HttpMethod.Get, "api/aiteam/health");
             using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
 
-            isAvailable = true;
+            isAvailable = response.IsSuccessStatusCode;
         }
         catch (HttpRequestException)
         {
