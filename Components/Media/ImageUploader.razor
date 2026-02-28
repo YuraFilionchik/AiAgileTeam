@@ -1,0 +1,51 @@
+@using AiAgileTeam.Models
+@inject MediaUploadService MediaUploadService
+
+<MudPaper Elevation="0" Class="pa-2 d-flex align-center gap-2">
+    <InputFile OnChange="HandleFilesChangedAsync" accept="image/*" />
+    @if (!string.IsNullOrWhiteSpace(_status))
+    {
+        <MudText Typo="Typo.caption">@_status</MudText>
+    }
+</MudPaper>
+
+@code {
+    [Parameter]
+    public string? ExecutionId { get; set; }
+
+    [Parameter]
+    public EventCallback<MediaAttachment> OnImageUploaded { get; set; }
+
+    private string? _status;
+
+    private async Task HandleFilesChangedAsync(InputFileChangeEventArgs args)
+    {
+        var file = args.File;
+        if (file is null)
+        {
+            return;
+        }
+
+        await using var stream = file.OpenReadStream(10 * 1024 * 1024);
+        using var memoryStream = new MemoryStream();
+        await stream.CopyToAsync(memoryStream);
+
+        var content = new MediaContent(memoryStream.ToArray(), file.ContentType, file.Name);
+        var dataUrl = $"data:{content.MimeType};base64,{Convert.ToBase64String(content.Bytes)}";
+        var resolvedUrl = dataUrl;
+
+        if (!string.IsNullOrWhiteSpace(ExecutionId))
+        {
+            _status = "Uploading...";
+            var response = await MediaUploadService.UploadAsync(content, ExecutionId);
+            resolvedUrl = response.Url;
+        }
+
+        _status = "Image attached";
+
+        if (OnImageUploaded.HasDelegate)
+        {
+            await OnImageUploaded.InvokeAsync(new MediaAttachment(content, resolvedUrl, content.MimeType));
+        }
+    }
+}

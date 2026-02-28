@@ -27,6 +27,8 @@ public class AgentConfig
     
     public bool IsSelected { get; set; } = true;
     public bool IsMandatory { get; set; } = false;
+    public bool IsBuiltIn { get; set; } = false;
+    public bool UseDefaultPrompt { get; set; } = false;
     
     // Legacy properties for migration
     public string? Name { get; set; } // deprecated - now uses DisplayName, kept for migration

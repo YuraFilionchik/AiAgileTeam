@@ -3,6 +3,7 @@ namespace AiAgileTeam.Models;
 public class AppSettings
 {
     public string ApiKeyMode { get; set; } = "global"; // global | per-agent
+    public OrchestrationMode OrchestrationMode { get; set; } = OrchestrationMode.GroupChat;
     public ApiConfig GlobalApi { get; set; } = new();
     public List<AgentConfig> Agents { get; set; } = new();
     

@@ -7,6 +7,7 @@ using Microsoft.SemanticKernel.Agents.Chat;
 using Microsoft.SemanticKernel.ChatCompletion;
 using AiAgileTeam.Models;
 using AiAgileTeam.Services;
+using AiAgileTeam.Services.Orchestration;
 using QuestPDF.Fluent;
 using QuestPDF.Helpers;
 using QuestPDF.Infrastructure;
@@ -20,12 +21,30 @@ public class AiTeamController : ControllerBase
     private readonly AiTeamService _teamService;
     private readonly SessionStore _sessionStore;
     private readonly MarkdownService _markdownService;
+    private readonly OrchestrationStrategyFactory _orchestrationStrategyFactory;
+    private readonly ITokenUsageTracker _tokenUsageTracker;
+    private readonly ITokenUsageContextAccessor _tokenUsageContextAccessor;
+    private readonly IMediaStorageService _mediaStorageService;
+    private readonly IAgentOrchestrator _agentOrchestrator;
 
-    public AiTeamController(AiTeamService teamService, SessionStore sessionStore, MarkdownService markdownService)
+    public AiTeamController(
+        AiTeamService teamService,
+        SessionStore sessionStore,
+        MarkdownService markdownService,
+        OrchestrationStrategyFactory orchestrationStrategyFactory,
+        ITokenUsageTracker tokenUsageTracker,
+        ITokenUsageContextAccessor tokenUsageContextAccessor,
+        IMediaStorageService mediaStorageService,
+        IAgentOrchestrator agentOrchestrator)
     {
         _teamService = teamService;
         _sessionStore = sessionStore;
         _markdownService = markdownService;
+        _orchestrationStrategyFactory = orchestrationStrategyFactory;
+        _tokenUsageTracker = tokenUsageTracker;
+        _tokenUsageContextAccessor = tokenUsageContextAccessor;
+        _mediaStorageService = mediaStorageService;
+        _agentOrchestrator = agentOrchestrator;
     }
 
     /// <summary>
@@ -35,6 +54,52 @@ public class AiTeamController : ControllerBase
     public IActionResult GetHealth()
     {
         return Ok(new { status = "ok" });
+    }
+
+    [HttpGet("token-usage/{executionId}")]
+    public ActionResult<TokenUsageSnapshot> GetTokenUsage(string executionId)
+    {
+        if (string.IsNullOrWhiteSpace(executionId))
+        {
+            return BadRequest("Execution id is required.");
+        }
+
+        return Ok(_tokenUsageTracker.GetSnapshot(executionId));
+    }
+
+    /// <summary>
+    /// Uploads media content and returns an access URL or data URI.
+    /// </summary>
+    [HttpPost("media/upload")]
+    public async Task<ActionResult<MediaUploadResponse>> UploadMediaAsync([FromBody] MediaUploadRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        if (string.IsNullOrWhiteSpace(request.ExecutionId))
+        {
+            return BadRequest("Execution id is required.");
+        }
+
+        if (request.Bytes.Length == 0)
+        {
+            return BadRequest("Media payload is empty.");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.MimeType))
+        {
+            return BadRequest("MIME type is required.");
+        }
+
+        var url = await _mediaStorageService.UploadAsync(
+            new MediaContent(request.Bytes, request.MimeType, request.FileName),
+            request.ExecutionId);
+
+        return Ok(new MediaUploadResponse
+        {
+            Url = url,
+            MimeType = request.MimeType,
+            FileName = request.FileName
+        });
     }
 
     /// <summary>
@@ -66,18 +131,23 @@ public class AiTeamController : ControllerBase
     public async IAsyncEnumerable<StreamingMessageDto> StartSession([FromBody] SessionRequest request, [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         string serverSessionId = Guid.NewGuid().ToString();
+        _tokenUsageTracker.Clear(serverSessionId);
+        _tokenUsageContextAccessor.Current = new TokenUsageContext(serverSessionId, request.Clarify ? "Clarification" : "Discussion");
         var sessionData = _sessionStore.GetOrCreate(serverSessionId);
         var groupChat = sessionData.GroupChat;
+        var useGroupChatSessionBuffer = request.Clarify || request.Settings.OrchestrationMode == OrchestrationMode.GroupChat;
         
-        if (request.History != null)
+        if (useGroupChatSessionBuffer && request.History != null)
         {
             foreach (var msg in request.History)
             {
-                var role = msg.IsUser ? AuthorRole.User : AuthorRole.Assistant;
-                var chatMsg = new Microsoft.SemanticKernel.ChatMessageContent(role, msg.Content);
-                chatMsg.AuthorName = msg.Author;
-                groupChat.AddChatMessage(chatMsg);
+                groupChat.AddChatMessage(BuildChatMessage(msg));
             }
+        }
+
+        if (request.AttachedMedia is not null)
+        {
+            await _agentOrchestrator.AddUserImageAsync(serverSessionId, request.AttachedMedia);
         }
         
         bool clarificationPhase = request.Clarify;
@@ -86,10 +156,10 @@ public class AiTeamController : ControllerBase
         if (clarificationPhase)
         {
             var (apiConfig, model) = GetClarificationConfig(request.Settings);
-            
+
             var cBuilder = Kernel.CreateBuilder();
-            cBuilder.Services.AddSingleton(_teamService.CreateChatService(apiConfig, model));
-            
+            cBuilder.Services.AddSingleton(_teamService.CreateChatService(apiConfig, model, "Clarification Agent", serverSessionId, "Clarification"));
+
             clarificationAgent = new ChatCompletionAgent
             {
                 Name = "Clarification Agent",
@@ -100,7 +170,7 @@ public class AiTeamController : ControllerBase
                                "4. End your final summary with the exact word [READY].",
                 Kernel = cBuilder.Build()
             };
-            
+
             groupChat.AddChatMessage(new Microsoft.SemanticKernel.ChatMessageContent(AuthorRole.User, request.Query));
             
             await foreach (var content in ProcessAgentResponseAsync(clarificationAgent, groupChat, serverSessionId, cancellationToken))
@@ -110,8 +180,13 @@ public class AiTeamController : ControllerBase
         }
         else
         {
-            groupChat.AddChatMessage(new Microsoft.SemanticKernel.ChatMessageContent(AuthorRole.User, request.Query));
-            await foreach (var content in RunTeamDiscussionAsync(request.Settings, sessionData, serverSessionId, cancellationToken))
+            if (request.Settings.OrchestrationMode == OrchestrationMode.GroupChat)
+            {
+                groupChat.AddChatMessage(new Microsoft.SemanticKernel.ChatMessageContent(AuthorRole.User, request.Query));
+            }
+
+            var strategy = _orchestrationStrategyFactory.Resolve(request.Settings.OrchestrationMode);
+            await foreach (var content in strategy.RunDiscussionAsync(request.Settings, sessionData, serverSessionId, request.Query, cancellationToken))
             {
                 yield return content;
             }
@@ -233,22 +308,31 @@ public class AiTeamController : ControllerBase
     public async IAsyncEnumerable<StreamingMessageDto> SendMessage([FromBody] SessionRequest request, [FromQuery] bool isClarificationPhase, [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         string serverSessionId = request.ServerSessionId ?? Guid.NewGuid().ToString();
+        if (string.IsNullOrWhiteSpace(request.ServerSessionId))
+        {
+            _tokenUsageTracker.Clear(serverSessionId);
+        }
+
+        _tokenUsageContextAccessor.Current = new TokenUsageContext(serverSessionId, isClarificationPhase ? "Clarification" : "Discussion");
         var sessionData = _sessionStore.GetOrCreate(serverSessionId);
         var groupChat = sessionData.GroupChat;
+        var useGroupChatSessionBuffer = isClarificationPhase || request.Settings.OrchestrationMode == OrchestrationMode.GroupChat;
         
         // Recover history if session is not configured and history is provided
-        if (!sessionData.IsConfigured && request.History != null)
+        if (useGroupChatSessionBuffer && !sessionData.IsConfigured && request.History != null)
         {
             foreach(var msg in request.History) 
             {
-                var role = msg.IsUser ? AuthorRole.User : AuthorRole.Assistant;
-                var chatMsg = new Microsoft.SemanticKernel.ChatMessageContent(role, msg.Content);
-                chatMsg.AuthorName = msg.Author;
-                groupChat.AddChatMessage(chatMsg);
+                groupChat.AddChatMessage(BuildChatMessage(msg));
             }
         }
+
+        if (request.AttachedMedia is not null)
+        {
+            await _agentOrchestrator.AddUserImageAsync(serverSessionId, request.AttachedMedia);
+        }
         
-        if (!string.IsNullOrWhiteSpace(request.Query))
+        if (useGroupChatSessionBuffer && !string.IsNullOrWhiteSpace(request.Query))
         {
             groupChat.AddChatMessage(new Microsoft.SemanticKernel.ChatMessageContent(AuthorRole.User, request.Query));
         }
@@ -256,10 +340,10 @@ public class AiTeamController : ControllerBase
         if (isClarificationPhase)
         {
             var (apiConfig, model) = GetClarificationConfig(request.Settings);
-            
+
             var cBuilder = Kernel.CreateBuilder();
-            cBuilder.Services.AddSingleton(_teamService.CreateChatService(apiConfig, model));
-            
+            cBuilder.Services.AddSingleton(_teamService.CreateChatService(apiConfig, model, "Clarification Agent", serverSessionId, "Clarification"));
+
             var clarificationAgent = new ChatCompletionAgent
             {
                 Name = "Clarification Agent",
@@ -278,7 +362,8 @@ public class AiTeamController : ControllerBase
         }
         else
         {
-            await foreach (var content in RunTeamDiscussionAsync(request.Settings, sessionData, serverSessionId, cancellationToken))
+            var strategy = _orchestrationStrategyFactory.Resolve(request.Settings.OrchestrationMode);
+            await foreach (var content in strategy.RunDiscussionAsync(request.Settings, sessionData, serverSessionId, request.Query, cancellationToken))
             {
                 yield return content;
             }
@@ -318,13 +403,16 @@ public class AiTeamController : ControllerBase
                 if (hasMore)
                 {
                     var message = enumerator!.Current;
+                    var mediaUrl = TryExtractImageUrl(message);
                     currentContent += message.Content;
                     yield return new StreamingMessageDto
                     {
                         Author = agent.Name ?? "Agent", // Author is always the clarification agent
                         ContentPiece = message.Content ?? "",
                         IsComplete = false,
-                        ServerSessionId = serverSessionId
+                        ServerSessionId = serverSessionId,
+                        MediaUrl = mediaUrl,
+                        MediaMimeType = !string.IsNullOrWhiteSpace(mediaUrl) ? "image/*" : null
                     };
                 }
             }
@@ -345,174 +433,62 @@ public class AiTeamController : ControllerBase
         }
     }
 
-    private async IAsyncEnumerable<StreamingMessageDto> RunTeamDiscussionAsync(AppSettings settings, SessionData sessionData, string serverSessionId, [EnumeratorCancellation] CancellationToken cancellationToken)
+    private static ChatMessageContent BuildChatMessage(ChatMessageDto dto)
     {
-        var groupChat = sessionData.GroupChat;
+        var role = dto.IsUser ? AuthorRole.User : AuthorRole.Assistant;
+        var hasImage = !string.IsNullOrWhiteSpace(dto.MediaUrl) && !string.IsNullOrWhiteSpace(dto.MediaMimeType);
 
-        if (!sessionData.IsConfigured)
+        if (!hasImage)
         {
-            var agentsToRun = settings.Agents.Where(a => a.IsSelected).ToList();
-            var skAgents = new List<ChatCompletionAgent>();
-            ChatCompletionAgent? projectManager = null;
-
-            Console.WriteLine($"[AiTeamController] Creating agents. Total selected: {agentsToRun.Count}");
-            foreach (var agentConfig in agentsToRun)
+            return new ChatMessageContent(role, dto.Content)
             {
-                Console.WriteLine($"[AiTeamController]   - {agentConfig.DisplayName} ({agentConfig.Role}) IsSelected={agentConfig.IsSelected}, IsMandatory={agentConfig.IsMandatory}");
-                var agent = _teamService.CreateAgent(agentConfig, settings);
-                skAgents.Add(agent);
-                groupChat.AddAgent(agent);
-                if (agentConfig.Role == "Project Manager") { projectManager = agent; }
-            }
-
-            if (projectManager != null)
-            {
-                // Resolve PM's LLM for orchestration decisions and context compression
-                var pmConfig = agentsToRun.First(a => a.Role == "Project Manager");
-                ApiConfig pmApiConfig = settings.ApiKeyMode == "global"
-                    ? settings.GlobalApi
-                    : pmConfig.ApiSettings ?? settings.GlobalApi;
-                var pmLlm = _teamService.CreateChatService(pmApiConfig, pmConfig.ModelSettings.Model);
-
-                sessionData.PmLlm = pmLlm;
-                sessionData.Compressor = new ChatContextCompressor(pmLlm, tailSize: 4);
-
-                var selectionStrategy = new PmOrchestratorSelectionStrategy(pmLlm, sessionData.Compressor);
-
-                groupChat.ExecutionSettings = new()
-                {
-                    SelectionStrategy = selectionStrategy,
-                    TerminationStrategy = new SafeTerminationStrategy()
-                    {
-                        MaximumIterations = agentsToRun.Count * 3 + 3
-                    }
-                };
-                Console.WriteLine($"[AiTeamController] PM-driven orchestration configured. Agents count: {agentsToRun.Count}");
-            }
-            else
-            {
-                Console.WriteLine($"[AiTeamController] WARNING: Project Manager not found in selected agents!");
-            }
-            sessionData.IsConfigured = true;
+                AuthorName = dto.Author
+            };
         }
 
-        string currentAuthor = "";
-        bool firstChunk = true;
-        // Buffer the floor-change message so we only emit it when the agent
-        // actually produces content. Agents that return empty responses from
-        // the LLM are silently skipped instead of showing a hollow
-        // "[Project Manager gives floor to …]" in the UI.
-        bool currentAuthorHasContent = false;
-        bool pendingFloorChange = false;
-        Exception? caughtException = null;
-
-        IAsyncEnumerator<StreamingChatMessageContent>? enumerator = null;
-        try
+        var items = new List<KernelContent>();
+        if (!string.IsNullOrWhiteSpace(dto.Content))
         {
-            enumerator = groupChat.InvokeStreamingAsync().GetAsyncEnumerator(cancellationToken);
+            items.Add(new TextContent(dto.Content));
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+
+        items.Add(new ImageContent { Uri = new Uri(dto.MediaUrl!, UriKind.RelativeOrAbsolute) });
+
+        var contentItems = new ChatMessageContentItemCollection();
+        foreach (var item in items)
         {
-            caughtException = ex;
+            contentItems.Add(item);
         }
 
-        if (caughtException == null)
+        return new ChatMessageContent
         {
-            bool hasMore = true;
-            while (hasMore)
-            {
-                try
-                {
-                    hasMore = await enumerator!.MoveNextAsync();
-                }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                {
-                    hasMore = false;
-                    caughtException = ex;
-                }
-
-                if (hasMore)
-                {
-                    var message = enumerator!.Current;
-
-                    Console.WriteLine($"[AiTeamController] SK stream chunk: AuthorName='{message.AuthorName}', Content='{message.Content?.Substring(0, Math.Min(30, message.Content?.Length ?? 0))}', HasContent={!string.IsNullOrEmpty(message.Content)}");
-
-                    // Detect author change
-                    if (firstChunk || (!string.IsNullOrEmpty(message.AuthorName) && message.AuthorName != currentAuthor))
-                    {
-                        // Complete the previous agent only if they actually produced content
-                        if (!firstChunk && !string.IsNullOrEmpty(currentAuthor) && currentAuthorHasContent)
-                        {
-                            Console.WriteLine($"[AiTeamController] Sending IsComplete=true for '{currentAuthor}'");
-                            yield return new StreamingMessageDto { Author = currentAuthor, ContentPiece = "", IsComplete = true, ServerSessionId = serverSessionId };
-                        }
-                        else if (!firstChunk && !string.IsNullOrEmpty(currentAuthor) && !currentAuthorHasContent)
-                        {
-                            Console.WriteLine($"[AiTeamController] Skipping empty turn from '{currentAuthor}'");
-                        }
-
-                        if (!string.IsNullOrEmpty(message.AuthorName))
-                        {
-                            currentAuthor = message.AuthorName;
-                            Console.WriteLine($"[AiTeamController] Now processing: '{currentAuthor}'");
-                        }
-                        else if (firstChunk)
-                        {
-                            currentAuthor = "Unknown";
-                        }
-
-                        // Buffer the floor-change — only emit when content arrives
-                        pendingFloorChange = true;
-                        currentAuthorHasContent = false;
-                        firstChunk = false;
-                    }
-
-                    // Emit content (and flush the buffered floor-change on first content chunk)
-                    if (!string.IsNullOrEmpty(message.Content) && !message.Content.Trim().All(char.IsWhiteSpace))
-                    {
-                        if (pendingFloorChange)
-                        {
-                            yield return new StreamingMessageDto { Author = "System", ContentPiece = $"\r\n*[Project Manager gives floor to {currentAuthor}...]*\r\n\r\n", IsComplete = true, ServerSessionId = serverSessionId };
-                            pendingFloorChange = false;
-                        }
-
-                        currentAuthorHasContent = true;
-                        yield return new StreamingMessageDto
-                        {
-                            Author = currentAuthor,
-                            ContentPiece = message.Content,
-                            IsComplete = false,
-                            ServerSessionId = serverSessionId
-                        };
-                    }
-                }
-            }
-        }
-
-        if (enumerator != null)
-        {
-            await enumerator.DisposeAsync();
-        }
-
-        if (caughtException != null)
-        {
-            var hint = "";
-            try
-            {
-                var msg = caughtException.Message ?? string.Empty;
-                if (msg.Contains("404") || msg.Contains("Not Found", StringComparison.OrdinalIgnoreCase) || msg.Contains("Response status code does not indicate success", StringComparison.OrdinalIgnoreCase))
-                {
-                    hint = "\r\nHint: Provider returned 404 Not Found. Check provider settings (ApiKey, Endpoint) and the model name — the model may be unavailable for your account or the name is incorrect.\r\n";
-                }
-            }
-            catch { }
-
-            Console.WriteLine($"[ERROR] Discussion exception: {caughtException}");
-            yield return new StreamingMessageDto { Author = "System", ContentPiece = $"\r\n⚠️ Discussion error: {caughtException.Message}\r\n{hint}", IsComplete = true, ServerSessionId = serverSessionId };
-        }
-        else if (!firstChunk && currentAuthorHasContent)
-        {
-            yield return new StreamingMessageDto { Author = currentAuthor, ContentPiece = "", IsComplete = true, ServerSessionId = serverSessionId };
-        }
+            Role = role,
+            AuthorName = dto.Author,
+            Items = contentItems
+        };
     }
+
+    private static string? TryExtractImageUrl(ChatMessageContent message)
+    {
+        if (message.Items is null)
+        {
+            return null;
+        }
+
+        var imageItem = message.Items.FirstOrDefault(item => item.GetType().Name.Contains("ImageContent", StringComparison.Ordinal));
+        if (imageItem is null)
+        {
+            return null;
+        }
+
+        var uriText = imageItem.GetType().GetProperty("Uri")?.GetValue(imageItem)?.ToString();
+        if (!string.IsNullOrWhiteSpace(uriText))
+        {
+            return uriText;
+        }
+
+        var dataUri = imageItem.GetType().GetProperty("DataUri")?.GetValue(imageItem)?.ToString();
+        return string.IsNullOrWhiteSpace(dataUri) ? null : dataUri;
+    }
+
 }

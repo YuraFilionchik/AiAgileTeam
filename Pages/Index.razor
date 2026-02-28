@@ -25,6 +25,7 @@ else
                     <MudTh>Include</MudTh>
                     <MudTh>Name</MudTh>
                     <MudTh>Role</MudTh>
+                    <MudTh>Actions</MudTh>
                 </HeaderContent>
                 <RowTemplate>
                     <MudTd DataLabel="Include">
@@ -32,6 +33,11 @@ else
                     </MudTd>
                     <MudTd DataLabel="Name">@context.DisplayName</MudTd>
                     <MudTd DataLabel="Role">@context.Role</MudTd>
+                    <MudTd DataLabel="Actions">
+                        <MudButton Variant="Variant.Text" Color="Color.Primary" Size="Size.Small" OnClick="@(() => OpenEditAgentDialog(context))">
+                            Edit
+                        </MudButton>
+                    </MudTd>
                 </RowTemplate>
             </MudTable>
         </MudCardContent>
@@ -77,6 +83,34 @@ else
                 await SettingsService.SaveSettingsAsync(_settings);
                 StateHasChanged();
             }
+        }
+    }
+
+    private async Task OpenEditAgentDialog(AgentConfig agent)
+    {
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Medium, FullWidth = true };
+        var parameters = new DialogParameters
+        {
+            ["Agent"] = agent
+        };
+
+        var dialog = await DialogService.ShowAsync<EditAgentModal>($"Edit Agent: {agent.Role}", parameters, options);
+        var result = await dialog.Result;
+
+        if (result != null && !result.Canceled && result.Data is AgentConfig editedAgent)
+        {
+            var existingAgent = _settings.Agents.FirstOrDefault(a => a.Id == editedAgent.Id);
+            if (existingAgent == null)
+            {
+                return;
+            }
+
+            existingAgent.DisplayName = editedAgent.DisplayName;
+            existingAgent.SystemPrompt = editedAgent.SystemPrompt;
+            existingAgent.UseDefaultPrompt = editedAgent.UseDefaultPrompt;
+
+            await SettingsService.SaveSettingsAsync(_settings);
+            StateHasChanged();
         }
     }
 

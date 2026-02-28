@@ -32,11 +32,15 @@
 │         │                     │                     │
 │         ▼                     ▼                     │
 │  ┌─────────────────────────────────────────┐       │
-│  │  Semantic Kernel AgentGroupChat         │       │
+│  │ OrchestrationStrategyFactory            │       │
 │  │  ┌──────────────────────────────────┐   │       │
-│  │  │ PmOrchestratorSelectionStrategy  │   │       │
-│  │  │ SafeTerminationStrategy          │   │       │
-│  │  │ ChatContextCompressor            │   │       │
+│  │  │ GroupChatOrchestrationStrategy   │   │       │
+│  │  │  ├─ PmOrchestratorSelection...   │   │       │
+│  │  │  ├─ SafeTerminationStrategy      │   │       │
+│  │  │  └─ ChatContextCompressor        │   │       │
+│  │  │ MagenticOrchestrationStrategy    │   │       │
+│  │  │  ├─ StandardMagenticManager      │   │       │
+│  │  │  └─ InProcessRuntime             │   │       │
 │  │  └──────────────────────────────────┘   │       │
 │  └─────────────────────────────────────────┘       │
 └─────────────────────────────────────────────────────┘
@@ -189,7 +193,16 @@ Regex: "You are a ([^.]+)\."
 ```
 Этот паттерн критичен — `PmOrchestratorSelectionStrategy` и `GetAgentRole()` зависят от него.
 
-### 4.2. Конфигурация GroupChat
+### 4.2. Выбор оркестрации
+
+Во время фазы дискуссии сервер выбирает стратегию по `AppSettings.OrchestrationMode`.
+
+| OrchestrationMode | Реализация | Назначение |
+|---|---|---|
+| `GroupChat` (default) | `GroupChatOrchestrationStrategy` | Текущий battle-tested режим с кастомными стратегиями выбора/завершения |
+| `Magentic` | `MagenticOrchestrationStrategy` | Dynamic planning через `StandardMagenticManager` и `MagenticOrchestration` |
+
+### 4.3. Конфигурация GroupChat
 
 ```csharp
 groupChat.ExecutionSettings = new()
@@ -202,7 +215,7 @@ groupChat.ExecutionSettings = new()
 };
 ```
 
-### 4.3. Стратегия выбора следующего агента (PmOrchestratorSelectionStrategy)
+### 4.4. Стратегия выбора следующего агента (PmOrchestratorSelectionStrategy)
 
 PM LLM решает, кто говорит следующим. Полный алгоритм:
 
@@ -258,7 +271,7 @@ Rules:
 
 Параметры LLM-вызова: `max_tokens=30`, `temperature=0.1`.
 
-### 4.4. Сжатие контекста (ChatContextCompressor)
+### 4.5. Сжатие контекста (ChatContextCompressor)
 
 Для экономии токенов история разделяется на две части:
 
@@ -281,7 +294,7 @@ Rules:
 - Суммаризация кэшируется — при новых сообщениях дополняется инкрементально
 - Параметры суммаризации: `max_tokens=400`, `temperature=0.2`
 
-### 4.5. Стратегия завершения (SafeTerminationStrategy)
+### 4.6. Стратегия завершения (SafeTerminationStrategy)
 
 Четыре уровня защиты от зацикливания:
 
@@ -297,7 +310,7 @@ Jaccard similarity считается по word-sets сообщений:
 similarity = |A ∩ B| / |A ∪ B|
 ```
 
-### 4.6. Буферизация floor-change сообщений
+### 4.7. Буферизация floor-change сообщений (только GroupChat)
 
 Проблема: SK всегда производит metadata-chunk с `AuthorName` для каждого агента, даже если LLM вернул пустой ответ. Контроллер **буферизует** floor-change и отправляет клиенту только при наличии реального контента:
 
@@ -312,6 +325,29 @@ SK chunk: AuthorName="Артём", Content=""
   → предыдущий буфер (Артём) без контента → skip + log
 ```
 
+### 4.8. Magentic orchestration (true Magentic)
+
+В режиме `Magentic` используется `MagenticOrchestration` + `StandardMagenticManager`.
+
+```csharp
+var manager = new StandardMagenticManager(pmLlm, new OpenAIPromptExecutionSettings { Temperature = 0.1f })
+{
+    MaximumInvocationCount = agentsCount * 3 + 3
+};
+
+var orchestration = new MagenticOrchestration(manager, agents)
+{
+    ResponseCallback = OnResponseAsync
+};
+```
+
+Особенности режима:
+
+- `ResponseCallback` отдает **полные сообщения** (не chunk-stream как `InvokeStreamingAsync` в GroupChat)
+- выполняется через `InProcessRuntime`
+- финальный ответ дополнительно нормализуется до наличия маркера `[DONE]`
+- `@mention` и floor-change механика GroupChat в этом режиме не используются
+
 ---
 
 ## 5. Управление серверными сессиями
@@ -324,6 +360,7 @@ SessionStore (ConcurrentDictionary<string, SessionEntry>)
   ├── SessionData
   │     ├── AgentGroupChat (SK group chat instance)
   │     ├── IsConfigured (bool — агенты созданы?)
+  │     ├── OrchestrationMode (GroupChat | Magentic)
   │     ├── Compressor (ChatContextCompressor)
   │     └── PmLlm (IChatCompletionService для PM)
   │
@@ -400,7 +437,7 @@ StreamingMessageDto
 | Маркер | Где проверяется | Действие |
 |--------|----------------|----------|
 | `[READY]` | Session.razor (клиент) | Переход от Clarification к Discussion |
-| `[DONE]` | SafeTerminationStrategy (сервер) | Завершение дискуссии SK |
+| `[DONE]` | `SafeTerminationStrategy` (GroupChat) / `MagenticOrchestrationStrategy` (Magentic) | Завершение дискуссии |
 | `[DONE]` | Session.razor (клиент) | `_isSessionComplete = true`, показать кнопку отчёта |
 | `@AgentName` | PmOrchestratorSelectionStrategy | Прямая передача хода упомянутому агенту |
 
@@ -459,6 +496,10 @@ SessionPhase { Title, Description, Status }
 |------|----------------|
 | `Pages/Session.razor` | UI сессии, управление фазами, стриминг |
 | `Api/Controllers/AiTeamController.cs` | API endpoints, создание агентов, streaming |
+| `Api/Services/Orchestration/IOrchestrationStrategy.cs` | Контракт оркестрации дискуссии |
+| `Api/Services/Orchestration/OrchestrationStrategyFactory.cs` | Выбор оркестратора по `OrchestrationMode` |
+| `Api/Services/Orchestration/GroupChatOrchestrationStrategy.cs` | Реализация GroupChat-оркестрации |
+| `Api/Services/Orchestration/MagenticOrchestrationStrategy.cs` | Реализация true Magentic orchestration |
 | `Api/Services/PmOrchestratorSelectionStrategy.cs` | PM-driven выбор следующего агента |
 | `Api/Services/SafeTerminationStrategy.cs` | Условия завершения дискуссии |
 | `Api/Services/ChatContextCompressor.cs` | Сжатие истории для экономии токенов |
@@ -467,3 +508,4 @@ SessionPhase { Title, Description, Status }
 | `Services/ApiHealthService.cs` | Health-check polling |
 | `Shared/DTOs.cs` | Модели запросов/ответов API |
 | `Shared/AgentConfig.cs` | Конфигурация агента |
+| `Shared/OrchestrationMode.cs` | Доступные режимы оркестрации |

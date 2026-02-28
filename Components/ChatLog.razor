@@ -1,4 +1,5 @@
 @using AiAgileTeam.Models
+@using AiAgileTeam.Components.Media
 @using Markdig
 @inject IJSRuntime JSRuntime
 
@@ -12,6 +13,10 @@
                     <div class="markdown-body">
                         @((MarkupString)Markdown.ToHtml(message.Content ?? "", _pipeline))
                     </div>
+                    @if (message.HasImage)
+                    {
+                        <AgentImageDisplay Url="@message.MediaUrl" />
+                    }
                 </MudCard>
             </div>
         }

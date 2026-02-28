@@ -1,0 +1,9 @@
+@if (!string.IsNullOrWhiteSpace(Url))
+{
+    <img src="@Url" alt="agent image" class="agent-image" />
+}
+
+@code {
+    [Parameter]
+    public string? Url { get; set; }
+}

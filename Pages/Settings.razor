@@ -34,6 +34,20 @@ else
         </MudCardContent>
     </MudCard>
 
+    <MudCard Class="mb-4">
+        <MudCardHeader>
+            <CardHeaderContent>
+                <MudText Typo="Typo.h6">Orchestration</MudText>
+            </CardHeaderContent>
+        </MudCardHeader>
+        <MudCardContent>
+            <MudSelect T="OrchestrationMode" Label="Discussion orchestration" Variant="Variant.Outlined" @bind-Value="_settings.OrchestrationMode">
+                <MudSelectItem Value="@OrchestrationMode.GroupChat">GroupChat (default)</MudSelectItem>
+                <MudSelectItem Value="@OrchestrationMode.Magentic">Magentic</MudSelectItem>
+            </MudSelect>
+        </MudCardContent>
+    </MudCard>
+
     <MudText Typo="Typo.h5" Class="mb-2">Agent Settings</MudText>
     
     @foreach (var agent in _settings.Agents)

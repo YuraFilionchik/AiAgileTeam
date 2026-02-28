@@ -1,0 +1,67 @@
+@using AiAgileTeam.Models
+
+<MudDialog>
+    <DialogContent>
+        <MudTextField Label="Agent Name" @bind-Value="_agent.DisplayName" Class="mb-3" />
+        <MudTextField Label="System Prompt" @bind-Value="_agent.SystemPrompt" Lines="6" Class="mb-3" />
+
+        @if (_agent.IsBuiltIn)
+        {
+            <MudCheckBox T="bool" @bind-Value="_agent.UseDefaultPrompt" Color="Color.Primary" Class="mb-2">
+                Use default system prompt
+            </MudCheckBox>
+
+            @if (_agent.UseDefaultPrompt)
+            {
+                <MudAlert Severity="Severity.Info" Dense="true">Built-in system prompt will be used for this agent at runtime.</MudAlert>
+            }
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" OnClick="Submit">Save</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter]
+    MudBlazor.IMudDialogInstance? MudDialog { get; set; }
+
+    [Parameter]
+    public AgentConfig Agent { get; set; } = new();
+
+    private AgentConfig _agent = new();
+
+    protected override void OnParametersSet()
+    {
+        _agent = new AgentConfig
+        {
+            Id = Agent.Id,
+            DisplayName = Agent.DisplayName,
+            Role = Agent.Role,
+            SystemPrompt = Agent.SystemPrompt,
+            ApiSettings = Agent.ApiSettings,
+            ModelSettings = Agent.ModelSettings,
+            IsSelected = Agent.IsSelected,
+            IsMandatory = Agent.IsMandatory,
+            IsBuiltIn = Agent.IsBuiltIn,
+            UseDefaultPrompt = Agent.UseDefaultPrompt,
+            Name = Agent.Name,
+            ProviderSettings = Agent.ProviderSettings,
+            MaxTokensPerResponse = Agent.MaxTokensPerResponse,
+            MaxRoundsPerSession = Agent.MaxRoundsPerSession
+        };
+    }
+
+    private void Submit()
+    {
+        if (string.IsNullOrWhiteSpace(_agent.DisplayName))
+        {
+            return;
+        }
+
+        MudDialog?.Close(DialogResult.Ok(_agent));
+    }
+
+    private void Cancel() => MudDialog?.Cancel();
+}

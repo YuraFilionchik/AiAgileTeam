@@ -1,4 +1,6 @@
 using AiAgileTeam.Services;
+using AiAgileTeam.Services.Orchestration;
+using AiAgileTeam.Models;
 using Polly;
 using Polly.Extensions.Http;
 using QuestPDF.Infrastructure;
@@ -10,8 +12,29 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddControllers();
 builder.Services.AddOpenApi();
 
+builder.Services.Configure<ModelPricingOptions>(builder.Configuration.GetSection("TokenPricing"));
+builder.Services.Configure<GeminiPricingConfig>(builder.Configuration.GetSection("TokenPricing:GeminiPricing"));
+builder.Services.Configure<MediaStorageOptions>(builder.Configuration.GetSection("MediaStorage"));
+builder.Services.AddSingleton<ITokenUsageTracker, InMemoryTokenUsageTracker>();
+builder.Services.AddSingleton<IModelPricingService, GeminiPricingService>();
+builder.Services.AddSingleton<ITokenUsageContextAccessor, AsyncLocalTokenUsageContextAccessor>();
+builder.Services.AddSingleton<IMediaStorageService>(sp =>
+{
+    var options = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<MediaStorageOptions>>().Value;
+    if (options.Provider.Equals("AzureBlob", StringComparison.OrdinalIgnoreCase))
+    {
+        return new AzureBlobMediaStorageService(sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<MediaStorageOptions>>());
+    }
+
+    return new InMemoryMediaStorageService();
+});
+
 builder.Services.AddSingleton<SessionStore>();
 builder.Services.AddSingleton<MarkdownService>();
+builder.Services.AddSingleton<GroupChatOrchestrationStrategy>();
+builder.Services.AddSingleton<MagenticOrchestrationStrategy>();
+builder.Services.AddSingleton<IAgentOrchestrator, AgentOrchestrator>();
+builder.Services.AddSingleton<OrchestrationStrategyFactory>();
 
 static IAsyncPolicy<HttpResponseMessage> GetRetryPolicy()
 {

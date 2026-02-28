@@ -3,6 +3,8 @@
 @using System.Net.Http.Json
 @using AiAgileTeam.Models
 @using AiAgileTeam.Services
+@using AiAgileTeam.Components.Usage
+@using AiAgileTeam.Components.Media
 @inject SettingsService SettingsService
 @inject ChatSessionService SessionService
 @inject NavigationManager NavigationManager
@@ -47,6 +49,11 @@
                         <MudCard Class="mt-4">
                             <MudCardContent>
                                 <MudTextField @bind-Value="_userInput" Label="Reply..." Lines="3" />
+                                <ImageUploader ExecutionId="_serverSessionId" OnImageUploaded="HandleImageUploadedAsync" />
+                                @if (_pendingImage is not null)
+                                {
+                                    <AgentImageDisplay Url="@_pendingImage.Url" />
+                                }
                                 <div class="d-flex align-center mt-2 gap-2">
                                     <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SendMessage" Disabled="_isProcessing">
                                         Send
@@ -94,6 +101,7 @@
             </div>
             <div class="session-summary-wrapper">
                 <SessionSummaryPanel Phases="_phases" />
+                <LiveTokenUsagePanel ExecutionId="_serverSessionId" IsPolling="_isProcessing" />
             </div>
         </div>
     </MudItem>
@@ -125,6 +133,7 @@
     private bool _startNewServerSessionOnNextMessage;
     private string? _activeAgentName;
     private readonly List<SessionPhase> _phases = [];
+    private MediaAttachment? _pendingImage;
 
     private async Task ToggleAgentAsync(AgentConfig agent, bool val)
     {
@@ -311,7 +320,14 @@
                     }
 
                     currentAuthor = message.Author;
-                    uiMessage = new ChatMessage { Author = currentAuthor, Content = "", IsUser = false };
+                    uiMessage = new ChatMessage
+                    {
+                        Author = currentAuthor,
+                        Content = "",
+                        IsUser = false,
+                        MediaUrl = message.MediaUrl,
+                        MediaMimeType = message.MediaMimeType
+                    };
                     _messages.Add(uiMessage);
                     lastMessageWasComplete = false;
 
@@ -322,6 +338,14 @@
                     }
 
                     Console.WriteLine($"[Session.razor] Switched to author '{currentAuthor}'");
+                }
+
+                // Update media on any chunk that carries it (may arrive after initial creation)
+                if (uiMessage != null && !string.IsNullOrWhiteSpace(message.MediaUrl))
+                {
+                    uiMessage.MediaUrl = message.MediaUrl;
+                    uiMessage.MediaMimeType = message.MediaMimeType;
+                    StateHasChanged();
                 }
 
                 if (!string.IsNullOrEmpty(message.ContentPiece) && AppendStreamingContent(uiMessage, message.ContentPiece))
@@ -467,7 +491,14 @@
 
          var history = _messages
              .Where(m => !string.Equals(m.Author, "System", StringComparison.Ordinal))
-             .Select(m => new ChatMessageDto { Author = m.Author, Content = m.Content, IsUser = m.IsUser })
+             .Select(m => new ChatMessageDto
+             {
+                 Author = m.Author,
+                 Content = m.Content,
+                 IsUser = m.IsUser,
+                 MediaUrl = m.MediaUrl,
+                 MediaMimeType = m.MediaMimeType
+             })
              .ToList();
 
          var request = new SessionRequest
@@ -495,7 +526,7 @@
 
     private async Task SendMessage()
     {
-        if (string.IsNullOrWhiteSpace(_userInput)) return;
+        if (string.IsNullOrWhiteSpace(_userInput) && _pendingImage is null) return;
 
         var message = _userInput;
         _userInput = "";
@@ -503,10 +534,24 @@
         
         var mustStartNewSession = _startNewServerSessionOnNextMessage || string.IsNullOrEmpty(_serverSessionId);
         var historyBeforeCurrent = mustStartNewSession
-            ? _messages.Select(m => new ChatMessageDto { Author = m.Author, Content = m.Content, IsUser = m.IsUser }).ToList()
+            ? _messages.Select(m => new ChatMessageDto
+            {
+                Author = m.Author,
+                Content = m.Content,
+                IsUser = m.IsUser,
+                MediaUrl = m.MediaUrl,
+                MediaMimeType = m.MediaMimeType
+            }).ToList()
             : new List<ChatMessageDto>();
         
-        _messages.Add(new ChatMessage { Author = "User", Content = message, IsUser = true });
+        _messages.Add(new ChatMessage
+        {
+            Author = "User",
+            Content = message,
+            IsUser = true,
+            MediaUrl = _pendingImage?.Url,
+            MediaMimeType = _pendingImage?.MimeType
+        });
         await SaveCurrentSessionAsync();
         StateHasChanged();
 
@@ -520,8 +565,11 @@
                 Query = message,
                 Settings = _settings,
                 History = historyBeforeCurrent,
+                AttachedMedia = _pendingImage?.Content,
                 ServerSessionId = mustStartNewSession ? null : _serverSessionId
             };
+
+            _pendingImage = null;
 
             _startNewServerSessionOnNextMessage = false;
 
@@ -553,6 +601,13 @@
             _isProcessing = false;
             StateHasChanged();
         }
+    }
+
+    private Task HandleImageUploadedAsync(MediaAttachment attachment)
+    {
+        ArgumentNullException.ThrowIfNull(attachment);
+        _pendingImage = attachment;
+        return InvokeAsync(StateHasChanged);
     }
 
     private async Task DownloadReportAsync()

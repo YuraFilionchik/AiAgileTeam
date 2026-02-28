@@ -1,0 +1,113 @@
+@using AiAgileTeam.Models
+@inject TokenUsageService TokenUsageService
+@implements IDisposable
+
+<MudPaper Elevation="1" Class="pa-3 mt-3 token-usage-panel">
+    <MudText Typo="Typo.subtitle1" Class="mb-2" Style="font-weight: 600;">
+        <MudIcon Icon="@Icons.Material.Filled.DataUsage" Size="Size.Small" Class="mr-1" Style="vertical-align: middle;" />
+        Token usage
+    </MudText>
+
+    <MudGrid Class="mb-2">
+        <MudItem xs="6">
+            <MudText Typo="Typo.caption">Prompt</MudText>
+            <MudText Typo="Typo.body2">@_snapshot.TotalPrompt</MudText>
+        </MudItem>
+        <MudItem xs="6">
+            <MudText Typo="Typo.caption">Completion</MudText>
+            <MudText Typo="Typo.body2">@_snapshot.TotalCompletion</MudText>
+        </MudItem>
+        <MudItem xs="6">
+            <MudText Typo="Typo.caption">Total</MudText>
+            <MudText Typo="Typo.body2">@(_snapshot.TotalPrompt + _snapshot.TotalCompletion)</MudText>
+        </MudItem>
+        <MudItem xs="6">
+            <MudText Typo="Typo.caption">Cost</MudText>
+            <MudText Typo="Typo.body2">@_snapshot.TotalCost.ToString("F6")</MudText>
+        </MudItem>
+    </MudGrid>
+
+    @if (_snapshot.ByAgent.Count > 0)
+    {
+        <MudTable Items="@_snapshot.ByAgent.Values" Dense="true" Hover="true" Breakpoint="Breakpoint.Sm">
+            <HeaderContent>
+                <MudTh>Agent</MudTh>
+                <MudTh>Prompt</MudTh>
+                <MudTh>Completion</MudTh>
+                <MudTh>Cost</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="Agent">@context.AgentName</MudTd>
+                <MudTd DataLabel="Prompt">@context.PromptTokens</MudTd>
+                <MudTd DataLabel="Completion">@context.CompletionTokens</MudTd>
+                <MudTd DataLabel="Cost">@((context.EstimatedCost ?? 0m).ToString("F6"))</MudTd>
+            </RowTemplate>
+        </MudTable>
+    }
+    else
+    {
+        <MudText Typo="Typo.caption" Style="opacity: 0.7;">No usage data yet.</MudText>
+    }
+</MudPaper>
+
+@code {
+    [Parameter]
+    public string? ExecutionId { get; set; }
+
+    [Parameter]
+    public bool IsPolling { get; set; }
+
+    private readonly PeriodicTimer _timer = new(TimeSpan.FromSeconds(1));
+    private readonly CancellationTokenSource _pollingCts = new();
+    private TokenUsageSnapshot _snapshot = TokenUsageService.Empty();
+
+    protected override async Task OnInitializedAsync()
+    {
+        _ = PollAsync(_pollingCts.Token);
+        await RefreshAsync(_pollingCts.Token);
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await RefreshAsync(_pollingCts.Token);
+    }
+
+    private async Task PollAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (await _timer.WaitForNextTickAsync(cancellationToken))
+            {
+                if (!IsPolling)
+                {
+                    continue;
+                }
+
+                await RefreshAsync(cancellationToken);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    private async Task RefreshAsync(CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(ExecutionId))
+        {
+            _snapshot = TokenUsageService.Empty();
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        _snapshot = await TokenUsageService.GetSnapshotAsync(ExecutionId, cancellationToken);
+        await InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        _pollingCts.Cancel();
+        _timer.Dispose();
+        _pollingCts.Dispose();
+    }
+}

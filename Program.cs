@@ -37,4 +37,6 @@ builder.Services.AddBlazoredLocalStorage();
 builder.Services.AddScoped<SettingsService>();
 builder.Services.AddScoped<ChatSessionService>();
 builder.Services.AddScoped<ApiHealthService>();
+builder.Services.AddScoped<TokenUsageService>();
+builder.Services.AddScoped<MediaUploadService>();
 await builder.Build().RunAsync();

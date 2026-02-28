@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using AiAgileTeam.Models;
 using Microsoft.SemanticKernel.Agents;
 using Microsoft.SemanticKernel.Agents.Chat;
 using Microsoft.SemanticKernel.ChatCompletion;
@@ -10,6 +11,7 @@ public class SessionData
 {
     public AgentGroupChat GroupChat { get; } = new();
     public bool IsConfigured { get; set; }
+    public OrchestrationMode? OrchestrationMode { get; set; }
 
     /// <summary>Context compressor instance bound to this session's PM LLM.</summary>
     public ChatContextCompressor? Compressor { get; set; }
