@@ -435,7 +435,7 @@ public class AiTeamController : ControllerBase
                     if (firstChunk || (!string.IsNullOrEmpty(message.AuthorName) && message.AuthorName != currentAuthor))
                     {
                         // Signal completion of previous agent's message BEFORE switching
-                        // Но только если предыдущий агент реально что-то сказал
+                        // But only if the previous agent actually said something
                         if (!firstChunk && !string.IsNullOrEmpty(currentAuthor))
                         {
                             Console.WriteLine($"[AiTeamController] Sending IsComplete=true for '{currentAuthor}'");
@@ -460,8 +460,8 @@ public class AiTeamController : ControllerBase
                         firstChunk = false;
                     }
 
-                    // Отправляем контент только если это не системное сообщение о смене автора
-                    // и если контент действительно есть
+                    // Send content only if this is not a system floor-change message
+                    // and if content is actually present
                     if (!string.IsNullOrEmpty(message.Content) && !message.Content.Trim().All(char.IsWhiteSpace))
                     {
                         yield return new StreamingMessageDto

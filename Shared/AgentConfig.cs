@@ -5,17 +5,17 @@ public class AgentConfig
     public string Id { get; set; } = Guid.NewGuid().ToString();
     
     /// <summary>
-    /// Человеческое имя агента (например, "Александр", "Мария")
+    /// Human-friendly display name for the agent (e.g. "Alexander", "Maria")
     /// </summary>
     public string DisplayName { get; set; } = "";
     
     /// <summary>
-    /// Профессиональная роль/должность (например, "Project Manager", "Architect")
+    /// Professional role/position (e.g. "Project Manager", "Architect")
     /// </summary>
     public string Role { get; set; } = "";
     
     /// <summary>
-    /// Системный промпт агента (без имени - оно добавляется автоматически)
+    /// Agent system prompt (without the name - it is added automatically)
     /// </summary>
     public string SystemPrompt { get; set; } = "";
     

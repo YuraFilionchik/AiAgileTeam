@@ -11,19 +11,19 @@ public class SettingsService
     private readonly IConfiguration _configuration;
     private const string SettingsKey = "ai_team_settings";
     
-    // Списки человеческих имён для генерации
-    private static readonly string[] MaleNames = { "Александр", "Дмитрий", "Максим", "Сергей", "Андрей", "Алексей", "Артём", "Илья", "Кирилл", "Михаил", "Никита", "Егор", "Иван", "Владимир", "Павел" };
-    private static readonly string[] FemaleNames = { "Мария", "Анна", "Елена", "Ольга", "Наталья", "Ирина", "Татьяна", "Екатерина", "Светлана", "Анастасия", "Юлия", "Александра", "Виктория", "Дарья", "Полина" };
+    // Lists of human names used for generation
+    private static readonly string[] MaleNames = { "Alexander", "Dmitry", "Maxim", "Sergey", "Andrew", "Alexey", "Artem", "Ilya", "Kirill", "Mikhail", "Nikita", "Egor", "Ivan", "Vladimir", "Pavel" };
+    private static readonly string[] FemaleNames = { "Maria", "Anna", "Elena", "Olga", "Natalia", "Irina", "Tatyana", "Ekaterina", "Svetlana", "Anastasia", "Yulia", "Aleksandra", "Victoria", "Daria", "Polina" };
     
-    private static readonly Dictionary<string, string[]> RoleSpecificNames = new()
-    {
-        { "Project Manager", new[] { "Александр", "Дмитрий", "Сергей", "Михаил", "Елена", "Ольга" } },
-        { "Product Owner", new[] { "Мария", "Анна", "Наталья", "Андрей", "Алексей", "Ирина" } },
-        { "Architect", new[] { "Дмитрий", "Максим", "Артём", "Илья", "Екатерина", "Светлана" } },
-        { "Developer", new[] { "Кирилл", "Никита", "Егор", "Иван", "Анастасия", "Юлия" } },
-        { "QA", new[] { "Татьяна", "Виктория", "Дарья", "Павел", "Владимир", "Полина" } },
-        { "Scrum Master", new[] { "Александра", "Ирина", "Михаил", "Сергей", "Елена", "Андрей" } }
-    };
+        private static readonly Dictionary<string, string[]> RoleSpecificNames = new()
+        {
+            { "Project Manager", new[] { "Alexander", "Dmitry", "Sergey", "Mikhail", "Elena", "Olga" } },
+            { "Product Owner", new[] { "Maria", "Anna", "Natalia", "Andrew", "Alexey", "Irina" } },
+            { "Architect", new[] { "Dmitry", "Maxim", "Artem", "Ilya", "Ekaterina", "Svetlana" } },
+            { "Developer", new[] { "Kirill", "Nikita", "Egor", "Ivan", "Anastasia", "Yulia" } },
+            { "QA", new[] { "Tatyana", "Victoria", "Daria", "Pavel", "Vladimir", "Polina" } },
+            { "Scrum Master", new[] { "Aleksandra", "Irina", "Mikhail", "Sergey", "Elena", "Andrew" } }
+        };
     
     private static readonly HashSet<string> _usedNames = new();
     private static readonly Random _random = new();
@@ -169,7 +169,7 @@ public class SettingsService
     }
     
     /// <summary>
-    /// Получить случайное имя для указанной роли
+    /// Get a random display name for the specified role
     /// </summary>
     public static string GetRandomNameForRole(string role)
     {

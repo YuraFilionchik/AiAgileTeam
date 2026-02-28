@@ -272,7 +272,7 @@
                         Console.WriteLine($"[Session.razor] [DONE] detected in last message from '{message.Author}'");
                         _isSessionComplete = true;
                         CompleteAllPhases();
-                        AddPhase("Сессия завершена", "Итоговый отчёт готов");
+                        AddPhase("Session completed", "Final report is ready");
                         MarkPhaseCompleted(_phases.Count - 1);
                         StateHasChanged();
                         return; // Stop processing - session is complete
@@ -393,12 +393,12 @@
             _isInitializing = false;
             await SaveCurrentSessionAsync();
 
-            AddPhase("Запрос отправлен", Query.Length > 60 ? Query[..60] + "…" : Query);
+            AddPhase("Request sent", Query.Length > 60 ? Query[..60] + "…" : Query);
             if (Clarify)
             {
-                AddPhase("Уточнение требований");
+                AddPhase("Clarification");
             }
-            AddPhase(Clarify ? "Командная дискуссия" : "Обработка запроса");
+            AddPhase(Clarify ? "Team discussion" : "Processing request");
             SetPhaseInProgress();
             StateHasChanged();
             
