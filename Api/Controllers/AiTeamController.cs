@@ -398,6 +398,12 @@ public class AiTeamController : ControllerBase
 
         string currentAuthor = "";
         bool firstChunk = true;
+        // Buffer the floor-change message so we only emit it when the agent
+        // actually produces content. Agents that return empty responses from
+        // the LLM are silently skipped instead of showing a hollow
+        // "[Project Manager gives floor to …]" in the UI.
+        bool currentAuthorHasContent = false;
+        bool pendingFloorChange = false;
         Exception? caughtException = null;
 
         IAsyncEnumerator<StreamingChatMessageContent>? enumerator = null;
@@ -431,24 +437,18 @@ public class AiTeamController : ControllerBase
 
                     Console.WriteLine($"[AiTeamController] SK stream chunk: AuthorName='{message.AuthorName}', Content='{message.Content?.Substring(0, Math.Min(30, message.Content?.Length ?? 0))}', HasContent={!string.IsNullOrEmpty(message.Content)}");
 
-                    // Detect author change - this means previous agent finished their turn
-                    bool authorChanged = !firstChunk && !string.IsNullOrEmpty(message.AuthorName) && message.AuthorName != currentAuthor;
-
-                    if (authorChanged)
-                    {
-                        Console.WriteLine($"[AiTeamController] Author changed from '{currentAuthor}' to '{message.AuthorName}'");
-                    }
-
-                    // Only switch author if the new author is non-null and different from current
-                    // AND if we have already received some content from the previous author
+                    // Detect author change
                     if (firstChunk || (!string.IsNullOrEmpty(message.AuthorName) && message.AuthorName != currentAuthor))
                     {
-                        // Signal completion of previous agent's message BEFORE switching
-                        // But only if the previous agent actually said something
-                        if (!firstChunk && !string.IsNullOrEmpty(currentAuthor))
+                        // Complete the previous agent only if they actually produced content
+                        if (!firstChunk && !string.IsNullOrEmpty(currentAuthor) && currentAuthorHasContent)
                         {
                             Console.WriteLine($"[AiTeamController] Sending IsComplete=true for '{currentAuthor}'");
                             yield return new StreamingMessageDto { Author = currentAuthor, ContentPiece = "", IsComplete = true, ServerSessionId = serverSessionId };
+                        }
+                        else if (!firstChunk && !string.IsNullOrEmpty(currentAuthor) && !currentAuthorHasContent)
+                        {
+                            Console.WriteLine($"[AiTeamController] Skipping empty turn from '{currentAuthor}'");
                         }
 
                         if (!string.IsNullOrEmpty(message.AuthorName))
@@ -461,18 +461,22 @@ public class AiTeamController : ControllerBase
                             currentAuthor = "Unknown";
                         }
 
-                        if (firstChunk || !string.IsNullOrEmpty(message.AuthorName))
-                        {
-                            yield return new StreamingMessageDto { Author = "System", ContentPiece = $"\r\n*[Project Manager gives floor to {currentAuthor}...]*\r\n\r\n", IsComplete = true, ServerSessionId = serverSessionId };
-                        }
-
+                        // Buffer the floor-change — only emit when content arrives
+                        pendingFloorChange = true;
+                        currentAuthorHasContent = false;
                         firstChunk = false;
                     }
 
-                    // Send content only if this is not a system floor-change message
-                    // and if content is actually present
+                    // Emit content (and flush the buffered floor-change on first content chunk)
                     if (!string.IsNullOrEmpty(message.Content) && !message.Content.Trim().All(char.IsWhiteSpace))
                     {
+                        if (pendingFloorChange)
+                        {
+                            yield return new StreamingMessageDto { Author = "System", ContentPiece = $"\r\n*[Project Manager gives floor to {currentAuthor}...]*\r\n\r\n", IsComplete = true, ServerSessionId = serverSessionId };
+                            pendingFloorChange = false;
+                        }
+
+                        currentAuthorHasContent = true;
                         yield return new StreamingMessageDto
                         {
                             Author = currentAuthor,
@@ -506,7 +510,7 @@ public class AiTeamController : ControllerBase
             Console.WriteLine($"[ERROR] Discussion exception: {caughtException}");
             yield return new StreamingMessageDto { Author = "System", ContentPiece = $"\r\n⚠️ Discussion error: {caughtException.Message}\r\n{hint}", IsComplete = true, ServerSessionId = serverSessionId };
         }
-        else if (!firstChunk)
+        else if (!firstChunk && currentAuthorHasContent)
         {
             yield return new StreamingMessageDto { Author = currentAuthor, ContentPiece = "", IsComplete = true, ServerSessionId = serverSessionId };
         }

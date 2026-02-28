@@ -4,7 +4,6 @@ namespace AiAgileTeam.Models;
 
 public class SessionRequest
 {
-    [Required]
     public string Query { get; set; } = "";
     
     public bool Clarify { get; set; } = false;

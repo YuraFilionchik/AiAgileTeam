@@ -279,7 +279,13 @@
                         return; // Stop processing - session is complete
                     }
 
-                    if (_clarificationPhase && (lastMessage?.Content.Contains("[READY]") == true || _clarificationQuestionsAsked >= 2))
+                    // Transition to discussion when the agent signals [READY] (after at least 2 Q&A rounds)
+                    // or as a safety net after 3 full Q&A rounds regardless of [READY].
+                    // The counter is incremented at the end of ProcessApiStream, so at check time
+                    // it reflects previously completed rounds, not the current one.
+                    bool readySignalled = lastMessage?.Content.Contains("[READY]") == true && _clarificationQuestionsAsked >= 2;
+                    bool maxRoundsReached = _clarificationQuestionsAsked >= 3;
+                    if (_clarificationPhase && (readySignalled || maxRoundsReached))
                     {
                         _clarificationPhase = false;
                         CompleteCurrentPhase();
@@ -451,21 +457,27 @@
 
     private async Task StartTeamDiscussionAsync()
     {
-         var mustStartNewSession = _startNewServerSessionOnNextMessage || string.IsNullOrEmpty(_serverSessionId);
-         var history = mustStartNewSession
-             ? _messages.Select(m => new ChatMessageDto { Author = m.Author, Content = m.Content, IsUser = m.IsUser }).ToList()
-             : new List<ChatMessageDto>();
-             
+         // Always start a fresh server session for the discussion phase.
+         // The clarification phase registers the Clarification Agent in the
+         // group chat (via SK's InvokeAsync → EnsureAgent). Reusing that
+         // session would let the PM orchestrator keep selecting it, producing
+         // empty turns. A new session gets a clean agent pool.
+         _serverSessionId = null;
+         _startNewServerSessionOnNextMessage = false;
+
+         var history = _messages
+             .Where(m => !string.Equals(m.Author, "System", StringComparison.Ordinal))
+             .Select(m => new ChatMessageDto { Author = m.Author, Content = m.Content, IsUser = m.IsUser })
+             .ToList();
+
          var request = new SessionRequest
          {
              Query = "",
              Clarify = false,
              Settings = _settings,
              History = history,
-             ServerSessionId = mustStartNewSession ? null : _serverSessionId
+             ServerSessionId = null
          };
-
-         _startNewServerSessionOnNextMessage = false;
          
          _cts?.Dispose();
          _cts = new CancellationTokenSource();

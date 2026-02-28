@@ -56,9 +56,15 @@ public class AiTeamService
         ApiConfig apiConfig = appSettings.ApiKeyMode == "global" 
             ? appSettings.GlobalApi 
             : agentConfig.ApiSettings ?? appSettings.GlobalApi;
-        
+
         // Get model from agent's ModelSettings
         string model = agentConfig.ModelSettings.Model;
+
+        if (string.IsNullOrWhiteSpace(model))
+        {
+            throw new ArgumentException(
+                $"Model is not configured for agent '{agentConfig.DisplayName}' ({agentConfig.Role}). Please set a model in the agent's settings.");
+        }
         
         var chatService = CreateChatService(apiConfig, model);
         var builderInternal = Kernel.CreateBuilder();
