@@ -51,7 +51,7 @@
     [Parameter]
     public List<ChatMessage> Messages { get; set; } = new();
 
-    private MudPaper _scrollContainer;
+    private MudPaper? _scrollContainer;
     private MarkdownPipeline _pipeline = new MarkdownPipelineBuilder().UseAdvancedExtensions().Build();
 
     protected override async Task OnAfterRenderAsync(bool firstRender)

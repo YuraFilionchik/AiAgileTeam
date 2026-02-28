@@ -14,7 +14,7 @@
 
 @code {
     [CascadingParameter]
-    MudBlazor.IMudDialogInstance MudDialog { get; set; }
+    MudBlazor.IMudDialogInstance? MudDialog { get; set; }
 
     private AgentConfig _agent = new();
 
@@ -25,8 +25,8 @@
             return; // Can add validation
         }
 
-        MudDialog.Close(DialogResult.Ok(_agent));
+        MudDialog?.Close(DialogResult.Ok(_agent));
     }
 
-    void Cancel() => MudDialog.Cancel();
+    void Cancel() => MudDialog?.Cancel();
 }

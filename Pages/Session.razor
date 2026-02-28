@@ -104,13 +104,13 @@
     public string? SessionId { get; set; }
 
     [SupplyParameterFromQuery]
-    public string Query { get; set; }
+    public string Query { get; set; } = "";
 
     [SupplyParameterFromQuery]
     public bool Clarify { get; set; }
 
-    private ChatSession _currentSession;
-    private AppSettings _settings;
+    private ChatSession _currentSession = new();
+    private AppSettings _settings = new();
     private List<ChatMessage> _messages = new();
     private string _userInput = "";
     private bool _isInitializing = true;
@@ -190,9 +190,10 @@
     {
         if (!string.IsNullOrEmpty(SessionId))
         {
-            _currentSession = await SessionService.GetSessionAsync(SessionId);
-            if (_currentSession != null)
+            var session = await SessionService.GetSessionAsync(SessionId);
+            if (session != null)
             {
+                _currentSession = session;
                 _settings = _currentSession.SettingsSnapshot;
                 _messages = _currentSession.Messages;
                 _isInitializing = false;
@@ -235,7 +236,7 @@
         var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
 
         string currentAuthor = "";
-        ChatMessage uiMessage = null;
+        ChatMessage? uiMessage = null;
         bool lastMessageWasComplete = false;
         int messageCount = 0;
 

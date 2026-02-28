@@ -54,7 +54,7 @@ else
 }
 
 @code {
-    private AppSettings _settings;
+    private AppSettings _settings = new();
     private string _query = "";
     private bool _enableClarification = false;
 
@@ -69,7 +69,7 @@ else
         var dialog = await DialogService.ShowAsync<AddAgentModal>("Add Custom Agent", options);
         var result = await dialog.Result;
 
-        if (!result.Canceled)
+        if (result != null && !result.Canceled)
         {
             if (result.Data is AgentConfig newAgent)
             {
@@ -86,12 +86,12 @@ else
         bool keyMissing = false;
         if (_settings.Mode == "global")
         {
-            if (string.IsNullOrWhiteSpace(_settings.Global.ApiKey)) keyMissing = true;
+            if (string.IsNullOrWhiteSpace(_settings.Global?.ApiKey)) keyMissing = true;
         }
         else
         {
             var selectedAgents = _settings.Agents.Where(a => a.IsSelected);
-            if (!selectedAgents.Any() || selectedAgents.Any(a => string.IsNullOrWhiteSpace(a.ProviderSettings.ApiKey)))
+            if (!selectedAgents.Any() || selectedAgents.Any(a => string.IsNullOrWhiteSpace(a.ProviderSettings?.ApiKey)))
             {
                 keyMissing = true;
             }
